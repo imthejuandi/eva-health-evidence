@@ -17,3 +17,7 @@ to here, and re-run the command at the commit it names.
 
 This is AI work product. The orchestrator acted as EVA's CMO; a licensed physician reviews and countersigns.
 Nothing here is a clinical sign-off.
+
+## Snapshots
+
+- `snapshot-2026-11-11/`: transcripts up to 11 November 2026 21:01 UTC, the scratch folder read 21:38 to 21:47 UTC, and the eva-health repository at commit e5b42ff. Start with its `README.md` and `TESTS-SUMMARY.md`; `DELETIONS.md` says what was deleted earlier in the session and what survives; `transcripts/` and `scratch/` hold the archive parts with their checksums (`sha256sum -c SHA256SUMS`). A later snapshot will cover the rest of the programme.
