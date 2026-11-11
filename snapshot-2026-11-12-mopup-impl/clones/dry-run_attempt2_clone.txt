@@ -1,0 +1,29 @@
+clone: dry-run/attempt2/clone
+HEAD: a5dbdbe7775ac1b889e710def7573d9d66b2b158
+branches:
+* mopup
+  remotes/origin/HEAD -> origin/mopup
+  remotes/origin/central-fixes-wip
+  remotes/origin/claude/wonderful-meitner-l4g7p5
+  remotes/origin/gov
+  remotes/origin/main
+  remotes/origin/mopup
+  remotes/origin/signoff-b01-evidence
+  remotes/origin/signoff-runner-r4
+  remotes/origin/signoff-runner-r4-repair
+  remotes/origin/signoff-runner-r4-repair-verify
+  remotes/origin/signoff-runner-r4-verify
+  remotes/origin/signoff-runner-r5
+  remotes/origin/signoff-runner-r5-repair
+  remotes/origin/signoff-runner-r5-verify
+  remotes/origin/signoff-runner-r5-verify-repair
+  remotes/origin/worktree-wf_0b31701a-bdd-1
+  remotes/origin/worktree-wf_3ebe2253-c2c-1
+  remotes/origin/worktree-wf_3ebe2253-c2c-2
+  remotes/origin/worktree-wf_3ebe2253-c2c-3
+status:
+ M docs/signoff/work/decisions/f12_white_cells_core.json
+ M docs/signoff/work/decisions/f14_iron.json
+ M docs/signoff/work/research/f14_iron.json
+ M docs/signoff/work/verify/f12_white_cells_core.json
+ M docs/signoff/work/verify/f14_iron.json

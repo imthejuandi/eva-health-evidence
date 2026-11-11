@@ -1,0 +1,27 @@
+clone: dry-run/attempt1/clone-run0
+HEAD: 35ecb61b55bf30bbe3137b5ebfa5f3bc4be9c483
+branches:
+* mopup
+  remotes/origin/HEAD -> origin/mopup
+  remotes/origin/central-fixes-wip
+  remotes/origin/claude/wonderful-meitner-l4g7p5
+  remotes/origin/gov
+  remotes/origin/main
+  remotes/origin/mopup
+  remotes/origin/signoff-b01-evidence
+  remotes/origin/signoff-runner-r4
+  remotes/origin/signoff-runner-r4-repair
+  remotes/origin/signoff-runner-r4-repair-verify
+  remotes/origin/signoff-runner-r4-verify
+  remotes/origin/signoff-runner-r5
+  remotes/origin/signoff-runner-r5-repair
+  remotes/origin/signoff-runner-r5-verify
+  remotes/origin/signoff-runner-r5-verify-repair
+  remotes/origin/worktree-wf_0b31701a-bdd-1
+  remotes/origin/worktree-wf_3ebe2253-c2c-1
+  remotes/origin/worktree-wf_3ebe2253-c2c-2
+  remotes/origin/worktree-wf_3ebe2253-c2c-3
+status:
+?? docs/signoff/work/checks/B05-mopup-run.json
+?? docs/signoff/work/checks/B05-mopup-state.json
+?? docs/signoff/work/scorecard-B05.mopup.md

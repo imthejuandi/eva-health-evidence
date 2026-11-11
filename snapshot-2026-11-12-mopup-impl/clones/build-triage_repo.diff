@@ -1,0 +1,1354 @@
+diff --git a/docs/signoff/work/mopup/build-items.cjs b/docs/signoff/work/mopup/build-items.cjs
+index e40ae89..c466c85 100644
+--- a/docs/signoff/work/mopup/build-items.cjs
++++ b/docs/signoff/work/mopup/build-items.cjs
+@@ -1,354 +1,1019 @@
+ #!/usr/bin/env node
+-// build-items.cjs — builds items.json for the WS1 mop-up round. Read-only on the repository.
+-// Usage (from the repository root):
+-//   S=<scratch dir>
+-//   node docs/signoff/tools/compile.js --out-dir $S/compile-all            (compile of all 30 families, outside the repo)
+-//   npm run dsrt -- --seed-dir $S/compile-all --round 99 --out $S/checks-all.json
+-//   node $S/build-items.cjs <repo root> $S
+-// Re-run it after the D-43 rebuild and after any family file changes: every count comes from the files as they are.
++/* eslint-disable @typescript-eslint/no-require-imports -- a CommonJS Node tool, like docs/signoff/tools */
++// build-items.cjs — the item lists of the workstream 1 mop-up round (docs/signoff/work/mopup/plan.md, as amended by
++// the 14 rulings of DR-2026-11-11-01, docs/signoff/work/governance/mopup-rulings.md). AI work product for a licensed
++// physician to review; nothing here signs anything.
++//
++// Usage, from the repository root:
++//   node docs/signoff/work/mopup/build-items.cjs [--out <dir>] [--checks <file>] [--triage-dir <dir>]
++//        [--routes <file>] [--previous <items.json>] [--compile-dir <dir>] [--require-triage]
++//        [--allow-stale-checks] [--check]
++//
++//   --out <dir>          output folder (default docs/signoff/work/mopup): items.json, items/<family>.json (30 files),
++//                        reconciliation.json, and items-diff.json when --previous is given
++//   --checks <file>      the DSRT result over the compile of all 30 families, committed inside the repository
++//                        (default docs/signoff/work/mopup/checks-all.json; ruling M-14)
++//   --triage-dir <dir>   the triage files of ruling M-10 (default docs/signoff/work/mopup/triage); each is validated
++//                        against docs/signoff/work/mopup/triage-schema.json
++//   --routes <file>      the orchestrator's override file (default docs/signoff/work/mopup/triage-routes.json):
++//                        {ledger_id: {route: "fixer"|"evidence_pass"|"verifier"|"central", reason, rows?, text?}}
++//   --previous <file>    an earlier items.json: items-diff.json lists every item that appeared, disappeared or changed
++//                        owner, matched by content, not by id (M-14 (4))
++//   --compile-dir <dir>  keep the builder's own compile of all 30 families there (default: a temporary folder,
++//                        removed afterwards)
++//   --require-triage     stop when a family with judge-raised physician questions has no triage file (the rebuild)
++//   --allow-stale-checks build even when the checks file was run on another compile than today's files give
++//   --check              rebuild into a temporary folder and compare with --out; exit 1 on any difference
++//
++// The builder runs docs/signoff/tools/compile.js itself (all 30 families, from the decision files) and confirms that
++// the checks file was run on that same compile (the sha256 of the three seed files). Every path it writes is inside
++// the repository: no output names the compile folder, the output folder or any path outside the repository.
++// Deterministic: no clock and no random numbers; the same files give byte-identical output.
++// Re-run it last before the rebuild commit (M-14): every count comes from the files as they are that day.
+ "use strict";
+ const fs = require("fs");
++const os = require("os");
+ const path = require("path");
+-const ROOT = path.resolve(process.argv[2] || ".");
+-const S = path.resolve(process.argv[3] || ".");
+-const W = path.join(ROOT, "docs/signoff/work");
+-const rj = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
+-const { changedAfterVerdict } = require(path.join(ROOT, "docs/signoff/tools/lib/compile-diff.js"));
++const crypto = require("crypto");
++const { execFileSync } = require("child_process");
+ 
+-const famDoc = rj(path.join(W, "families.json"));
+-const F = famDoc.families;
+-const fams = Object.keys(F).sort();
+-const key = (r) => [r.marker_key, r.sex, r.age_group, r.physiological_state].join("|");
+-const k2f = {};
+-for (const f of fams) for (const k of F[f].keys) k2f[k] = f;
+-const short = (f) => f.slice(0, 3);
+-const fresh = rj(path.join(S, "checks-all.json"));
+-const changes = rj(path.join(S, "compile-all/changes.json"));
+-const res = (id) => fresh.results.find((r) => r.id === id) || { failures: [], status: "absent" };
+-const lastRound = (f) => (F[f].batch === "B01" ? 4 : 2);
+-const DEC = {}, VER = {}, LED = {};
+-for (const f of fams) { DEC[f] = rj(path.join(W, "decisions", f + ".json")); VER[f] = rj(path.join(W, "verify", f + ".json")); LED[f] = rj(path.join(W, "ledger", f + ".json")); }
++// ─── arguments ───
+ 
+-const items = {}; // family -> []
+-const central = []; // items that belong to no family
+-for (const f of fams) items[f] = [];
+-const counters = {};
+-function add(f, kind, o) {
+-  const k = `${short(f)}-${kind}`;
+-  counters[k] = (counters[k] || 0) + 1;
+-  const it = { id: `${k}-${String(counters[k]).padStart(2, "0")}`, family: f, kind, ...o };
+-  items[f].push(it);
+-  return it;
+-}
+-function addCentral(kind, o) {
+-  counters[kind] = (counters[kind] || 0) + 1;
+-  central.push({ id: `central-${kind}-${String(counters[kind]).padStart(2, "0")}`, family: null, kind, ...o });
++function parseArgs(argv) {
++  const flags = {};
++  const BOOL = new Set(["require-triage", "allow-stale-checks", "check"]);
++  for (let i = 0; i < argv.length; i++) {
++    const a = argv[i];
++    if (!a.startsWith("--")) throw new Error(`unexpected argument '${a}' (see the header of build-items.cjs)`);
++    const name = a.slice(2);
++    if (BOOL.has(name)) flags[name] = true;
++    else if (i + 1 < argv.length) flags[name] = argv[++i];
++    else throw new Error(`--${name} needs a value`);
++  }
++  return flags;
+ }
+-const FF = "family_fixer", VF = "verifier", CE = "central", W3 = "ws3_package", PH = "physician", EX = "external";
+ 
+-// ─── 1. D-30: rows the decision changed after the verifier's verdict ───
+-const OPT = ["optimal_low", "optimal_high", "grade"];
+-const BOUND = ["reference_low", "reference_high", "critical_low", "critical_high", "band_rule", "unit", "marker_class"];
+-const unexplained = changes.changes.filter((x) => !x.reason);
+-const unexplainedByRow = {};
+-for (const x of unexplained) { const k = x.loop_row_key || x.row_key; (unexplainedByRow[k] = unexplainedByRow[k] || []).push(x); }
+-const reverdictRows = {};
+-for (const f of fams) {
+-  const vm = new Map(VER[f].final_rows.map((r, i) => [key(r), [r, i]]));
+-  DEC[f].final_rows.forEach((r, i) => {
+-    const hit = vm.get(key(r));
+-    if (!hit) { add(f, "D30", { source: { file: `docs/signoff/work/decisions/${f}.json`, key: `final_rows[${i}] ${key(r)}` }, row_key: key(r), d30_class: "new_row", what: "Row the fixer added: no verifier verdict exists for it. It needs a research row (author) and a verifier verdict.", owner: VF, check: "E3; G2; D-02 (score eligibility)" }); return; }
+-    const [v, j] = hit;
+-    const ch = changedAfterVerdict(r, v);
+-    if (!ch.length) return;
+-    const opt = ch.filter((c) => OPT.includes(c));
+-    const bnd = ch.filter((c) => BOUND.includes(c));
+-    const cls = opt.length ? "optimal_bounds_or_grade" : bnd.length ? "other_bound_class_or_band_rule" : "text_only";
+-    const diff = [...opt, ...bnd].map((c) => `${c} ${JSON.stringify(v[c] ?? null)} -> ${JSON.stringify(r[c] ?? null)}`);
+-    const un = (unexplainedByRow[key(r)] || []).filter((x) => String(x.flag || "").startsWith("verdict on an earlier version"));
+-    (reverdictRows[f] = reverdictRows[f] || []).push(key(r));
+-    add(f, "D30", {
+-      source: { file: `docs/signoff/work/decisions/${f}.json`, key: `final_rows[${i}] ${key(r)}`, compared_with: `docs/signoff/work/verify/${f}.json final_rows[${j}]` },
+-      row_key: key(r), d30_class: cls, fields_changed_after_verdict: ch, bound_or_grade_changes: diff,
+-      what: cls === "optimal_bounds_or_grade"
+-        ? `Fresh verifier verdict and grade on the optimal bounds as compiled (${diff.join("; ")}). The verifier opens the source itself and writes its own evidence record where the bound's only record is the fixer's.`
+-        : cls === "other_bound_class_or_band_rule"
+-          ? `Fresh verifier verdict on the row as compiled: a reference bound, class or band rule changed after the verdict (${diff.join("; ")}).`
+-          : `Fresh verifier verdict on the row as compiled: only texts changed after the verdict (${ch.join(", ")}); the verifier re-reads them against the bounds and the wording rules.`,
+-      owner: VF,
+-      check: cls === "optimal_bounds_or_grade" ? "E3 (the verifier assigns the grade); D-02 score eligibility; D6 change reasons (C-21)" : "D6 change reasons (C-21, CEO-6): the verdict documents the row again; G2",
+-      closes_unexplained_changes: un.length,
+-      ruling: cls === "optimal_bounds_or_grade" ? "D-30 as worded (optimal bounds or grade)" : cls === "text_only" ? "CEO-6 (a verdict documents only a row unchanged since the verdict); needed to close C-21" : "D-30 as counted by the ruling (17 of 101 counted every bound) and CEO-6",
+-    });
+-  });
+-}
++const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
++const sha256File = (p) => (fs.existsSync(p) ? sha256(fs.readFileSync(p)) : null);
++
++/** Build every output in memory. Returns { files: {relative path: text}, summary, warnings, errors }. */
++function build(opts) {
++  const ROOT = opts.root;
++  const W = path.join(ROOT, "docs/signoff/work");
++  const rel = (p) => path.relative(ROOT, p).split(path.sep).join("/");
++  const inside = (p) => { const r = path.relative(ROOT, path.resolve(p)); return !!r && !r.startsWith("..") && !path.isAbsolute(r); };
++  const rj = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
++  const rjIf = (p) => (fs.existsSync(p) ? rj(p) : null);
++  const git = (args) => execFileSync("git", args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
++  const warnings = [], errors = [];
++
++  const checksFile = path.resolve(opts.checks || path.join(W, "mopup/checks-all.json"));
++  const triageDir = path.resolve(opts.triageDir || path.join(W, "mopup/triage"));
++  const routesFile = path.resolve(opts.routes || path.join(W, "mopup/triage-routes.json"));
++  for (const [name, p] of [["--checks", checksFile], ["--triage-dir", triageDir], ["--routes", routesFile]]) {
++    if (!inside(p)) throw new Error(`${name} must name a path inside the repository (ruling M-14): ${name === "--checks" ? "commit the check result as docs/signoff/work/mopup/checks-all.json" : "copy the files into the repository first"}`);
++  }
++  if (!fs.existsSync(checksFile)) throw new Error(`checks file not found: ${rel(checksFile)}`);
++  const CHECKS_REL = rel(checksFile);
++  const TRIAGE_REL = rel(triageDir);
+ 
+-// ─── 2. C-21: unexplained changes a fresh verdict does not close ───
+-const NEEDS_RECORD = /^(normal_|optimal_|critical_|unit_|row$)/;
+-for (const x of unexplained) {
+-  if (String(x.flag || "").startsWith("verdict on an earlier version")) continue;
+-  const f = x.family;
+-  const rk = x.loop_row_key || x.row_key;
+-  const d30 = (reverdictRows[f] || []).includes(rk);
+-  const isRecord = NEEDS_RECORD.test(x.field) || /^(optimal|reference|critical)_(low|high)$/.test(x.field) || x.field === "row";
+-  const nonRowColumn = ["panel_category", "is_genetic", "name_es", "name_en"].includes(x.field);
+-  if (d30 && !isRecord && !nonRowColumn) continue; // closes with the fresh verdict (simulated: 277 -> 9)
+-  add(f, "C21", {
+-    source: { file: `${path.relative(ROOT, S) || "."}/compile-all/changes.json (compile of all families)`, key: `${rk} ${x.field}` }, row_key: rk, field: x.field, from: x.from, to: x.to, direction: x.direction, flag: x.flag || null,
+-    what: nonRowColumn
+-      ? `Change of ${x.field} (${JSON.stringify(x.from)} -> ${JSON.stringify(x.to)}) has no reason. The column is not one a family file supplies: the reason goes in docs/signoff/work/reconciliation/reasons.json, or the change is reverted in the compile.`
+-      : x.field === "row"
+-        ? `Production row ${rk} is removed without the decision's own record: add a changes[] entry with row_key, field "row", to null, a reason and evidence (CEO-11, C-02).`
+-        : `Add a change record (reason, source${x.direction === "loosen" ? ", and a grade A or B evidence id: it is a loosening" : ""}) whose "to" is the compiled value, or restore the production value: ${x.field} ${JSON.stringify(x.from)} -> ${JSON.stringify(x.to)}.`,
+-    owner: nonRowColumn ? CE : FF, check: "D6 (C-21); D5",
++  const T = require(path.join(ROOT, "docs/signoff/tools/lib/compile-diff.js"));
++  const { changedAfterVerdict } = T;
++  const RC = require(path.join(ROOT, "docs/signoff/tools/lib/row-checks.js"));
++  const SRC = require(path.join(ROOT, "docs/signoff/tools/lib/sources.js"));
++  const SV = require(path.join(ROOT, "docs/signoff/tools/lib/schema-validator.js"));
++  const L = require(path.join(ROOT, "docs/signoff/tools/ledger.js"));
++
++  // ─── the commit and the compile of all 30 families ───
++  const COMMIT = git(["rev-parse", "HEAD"]);
++  const COMMIT_DATE = git(["log", "-1", "--format=%cI", "HEAD"]);
++  let compileDir = opts.compileDir ? path.resolve(opts.compileDir) : null;
++  const tmpCompile = !compileDir;
++  if (tmpCompile) compileDir = fs.mkdtempSync(path.join(os.tmpdir(), "build-items-compile-"));
++  fs.mkdirSync(compileDir, { recursive: true });
++  let compileExit = 0;
++  try {
++    execFileSync(process.execPath, [path.join(ROOT, "docs/signoff/tools/compile.js"), "--out-dir", compileDir], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
++  } catch (e) {
++    compileExit = e.status;
++    if (e.status !== 1) throw new Error(`compile.js failed (exit ${e.status}): ${String(e.stderr || "").split("\n").slice(-3).join(" ")}`);
++  }
++  const changes = rj(path.join(compileDir, "changes.json"));
++  const seedText = {};
++  for (const f of ["biomarker-ranges-en.json", "rangos-biomarcadores-es.json", "biomarker-sources.json"]) seedText[f] = fs.readFileSync(path.join(compileDir, f));
++  if (tmpCompile) fs.rmSync(compileDir, { recursive: true, force: true });
++  const fresh = rj(checksFile);
++  const checksSeed = {};
++  for (const [k, v] of Object.entries(fresh.inputs || {})) for (const f of Object.keys(seedText)) if (k.endsWith(`/${f}`) || k === f) checksSeed[f] = v;
++  const seedMismatch = Object.keys(seedText).filter((f) => checksSeed[f] !== sha256(seedText[f]));
++  if (seedMismatch.length) {
++    const msg = `${CHECKS_REL} was not run on the compile today's files give (${seedMismatch.join(", ")} differ): re-run the checks (README, 'Rebuild')`;
++    if (opts.allowStaleChecks) warnings.push(msg); else throw new Error(`${msg}, or pass --allow-stale-checks`);
++  }
++
++  // Paths outside the repository never reach an output: the checks file's details name the compile folder.
++  // Some ledger entries of the B01 pilot name judge files by the absolute path of a checkout: those become
++  // repository paths again.
++  const OUTSIDE_RE = /(?:\.\.\/)+[^\s"'`;,)\]]+|(?:^|(?<=[\s"'`(=:]))\/(?:tmp|home|root|var|Users|private|mnt)\/[^\s"'`;,)\]]+/g;
++  const scrub = (s) => String(s ?? "").replace(OUTSIDE_RE, (m) => {
++    const inRepo = m.match(/\/(docs\/signoff\/[^\s"'`;,)\]]+)$/);
++    if (inRepo && !/scratchpad|\/tmp\//.test(m)) return inRepo[1];
++    return /compile-all|changes\.json|migration\.sql|biomarker-|rangos-/.test(m) ? `<compile of all 30 families>/${path.basename(m)}` : "<a path outside the repository>";
+   });
+-}
+ 
+-// ─── 3. the family's failing checks, on today's runner and the compile of all 30 families ───
+-const allKeys = new Set(Object.keys(k2f));
+-const markerOf = (k) => { for (const s of String(k).split("|")) if (allKeys.has(s)) return s; return null; };
+-const famOfKey = (k) => { const s = String(k).split("|")[0]; if (F[s]) return s; const m = markerOf(k); return m ? k2f[m] : null; };
+-const K1_REL = { bun_creatinine: "f03_kidney", egfr_ckd_epi_2021: "f03_kidney", free_t_vermeulen: "f19_male_hormones", lymphocytes_absolute: "f12_white_cells_core", neutrophils_absolute: "f12_white_cells_core", nlr: "f12_white_cells_core", non_hdl: "f06_lipids_core", total_protein: "f01_albumin_proteins", homa_ir: "f05_glycaemia", tsat: "f14_iron" };
+-const src = (id, k) => ({ file: `${path.relative(ROOT, S) || "."}/checks-all.json (today's runner on the compile of all families); latest stored result docs/signoff/work/checks/<family>-r<n>.json`, key: `${id} ${k}` });
+-function checkItem(id, fl) {
+-  const k = String(fl.key), d = String(fl.detail || "");
+-  const f = famOfKey(k);
+-  const base = { source: src(id, k), failure_key: k, detail: d.slice(0, 400) };
+-  if (id === "D1") return addCentral("D1", { ...base, what: "The 'Biological Age' pseudo-row is still in the seed; a marker in no family has no retirement route (C-25, CEO-14).", owner: CE, check: "D1" });
+-  if (id === "D6") return addCentral("D6", { ...base, what: "The reconciliation set (diff, forward, rollback, reader tests) is written by the single compile (C-03) and D6's own test needs tightening (C-26).", owner: CE, check: "D6" });
+-  if (id === "L1") return addCentral("L1", { ...base, what: "The classifier derives 'critical' from reference limits (C-04).", owner: W3, package: "WS3-11, WS3-12, WS3-13", check: "L1" });
+-  if (id === "L2") return null; // aggregated below
+-  if (id === "P1") return addCentral("P1", { ...base, what: "Pre-analytical inputs missing in the app.", owner: W3, package: "WS3-20, WS3-23", check: "P1" });
+-  if (id === "S3") return null; // aggregated below
+-  if (id === "Q1") return null; // aggregated below
+-  if (id === "G2") { const m = k.split("|")[1]; const ff = k2f[m]; return add(ff, "G2", { ...base, what: "An added row differs from the template row the compile picked for it (category or 'tested twice a year' column, which no family file supplies): fix the template pick or the column in the compile, or record the difference centrally.", owner: CE, check: "G2" }); }
+-  if (id === "K1") { const rel = k.split("|")[1]; const ff = K1_REL[rel]; return add(ff, "K1", { ...base, k1_kind: k.split("|")[0], what: k.startsWith("opposite") ? "Opposite-category pair on a derived relationship inside the family. Not moved by the mop-up fixer: a bound may not move to pass a check; workstream 1-K decides (accepted reason, per-marker scale under D-14, or a physician question such as f03-DQ04)." : "One-step disagreement on a derived relationship: needs an accepted reason in coherence/accepted-reasons.json (C-13).", owner: CE, package: "WS1-K", check: "K1" }); }
+-  if (!f) return addCentral(id, { ...base, what: "Not attributable to a family.", owner: CE, check: id });
+-  if (id === "N1") return add(f, "N1", { ...base, what: "Population rule unresolved: a resolution in nhanes/n1-resolutions.json (C-14). The family's part, if any, is the 'reached by a minority' label and a physician question when more than 60% are non-optimal at 70 to 79.", owner: CE, package: "WS1-K", check: "N1" });
+-  if (id === "X1") return add(f, "X1", { ...base, what: "Version 3 reads albumin above 48 g/L as favourable while the row marks it out of range: one judged exception entry (D-25, C-15). The laboratory's ceiling may not move to pass the check; the dye Echevarne uses is awaited (methods letter).", owner: W3, package: "WS3-24", check: "X1" });
+-  if (id === "S2") return add(f, "S2", { ...base, what: "Scored set: classes, eligibility and groups are generated from the governance files and the verifier's grades.", owner: W3, package: "WS3-09", check: "S2" });
+-  if (id === "C1") {
+-    if (/labelled_by_age_proxy/.test(k)) return add(f, "C1", { ...base, what: "A 'Premenopausal' row is picked by age: accepted only in the narrow form of D-13 (no status recorded, flag set, note rendered).", owner: W3, package: "WS3-14, WS3-17", check: "C1" });
+-    return add(f, "C1", { ...base, what: "State or cycle-phase row never picked: the app's picker and the runner's C1 do not read the declared state yet.", owner: W3, package: /Pregnancy|Lactation/.test(k) ? "WS3-14, WS3-15, WS3-17" : "WS3-14, WS3-16, WS3-17", check: "C1" });
+-  }
+-  if (id === "D3") {
+-    if (/no_catalogue_band/.test(k)) return add(f, "D3", { ...base, what: "Pregnancy or lactation row with no Echevarne band for the state. Either remove the state row and rely on state rule 2.1 (as 9 families did), or keep it with its basis and source recorded. Depends on the physician's answer to D-12.", owner: FF, depends_on: "physician (D-12)", check: "D3; C1" });
+-    if (/band_split/.test(k)) return add(f, "D3", { ...base, what: "The row's age band spans two laboratory bands: cut the row at the laboratory's age (for example 18-20 and 21+), each with Echevarne's bounds.", owner: FF, needs: "new row keys: author stage and verifier verdict", check: "D3" });
+-    if (/no_catalogue_row/.test(k)) return add(f, "D3", { ...base, what: "No catalogue row for this key in this unit: record reference_basis population or decision_limit with its source on the row, or correct the unit; if the catalogue mapping is wrong it is a central input fix.", owner: FF, check: "D3" });
+-    if (/uncovered_ages/.test(k)) return add(f, "D3", { ...base, what: "The labelled row covers ages the catalogue band does not: state the age range the row applies to, or record the basis for the ages outside the laboratory's band.", owner: FF, check: "D3" });
+-    return add(f, "D3", { ...base, what: "Reference bounds differ from the catalogue without a recorded basis and source: correct the bounds or record reference_basis and its source.", owner: FF, check: "D3" });
+-  }
+-  if (id === "D5") return null; // covered by the C21 items (same rows), listed below when not
+-  if (id === "E1") {
+-    if (/\|number$/.test(k)) return add(f, "E1", { ...base, what: /pregnancy|lactation/.test(d) && !DEC[f].final_rows.some((r) => ["pregnancy", "lactation"].includes(r.physiological_state)) ? "The record supports a state row the decision removed: drop the stale supports[] link, or replace the quote with the exact sentence that holds the number." : "Replace the quote with the exact source sentence that holds the number (PubMed or PMC record), or state in the record's notes that the opened text does not hold it, so the grade rule applies.", owner: FF, stage: "evidence pass (research and verify files)", check: "E1" });
+-    return add(f, "E1", { ...base, what: "A sex, age or state split has no evidence record linked under the split's name: add the supports[] link, or the record, in the file named in the key (research, verify or decision).", owner: FF, stage: /\|decision\|/.test(k) ? "fixer (decision file)" : "evidence pass (research and verify files)", check: "E1" });
+-  }
+-  if (id === "E2") return add(f, "E2", { ...base, what: /unopenable/.test(k) ? (/catalogo-2026/.test(d) ? "The record cites Echevarne's catalogue by a repository URL the quote check cannot open, so the grade must be D. Cite the catalogue in reference_source only and drop the record from the bound's support, or regrade it D." : "Source not openable: switch the identifier to the PubMed or Europe PMC record of the same publication, or grade it D.") : "Quote not found in the source: copy the exact sentence, or state that the number is not in the opened text.", owner: FF, stage: "evidence pass (research and verify files)", check: "E2 (needs 98% found; 97.1% today)" });
+-  if (id === "M1") { const mk = markerOf(k); const locked = ["apolipoprotein_b_apob", "ldl_cholesterol", "non_hdl_cholesterol", "homa_ir"].includes(mk); return add(f, "M1", { ...base, what: "A reference floor of 0 makes a 'below range' zone reachable with no message. Set the floor to none with a change record, as f06 did for total cholesterol and triglycerides." + (locked ? " The row is a locked decision: E6 must not read the change as a silent change, so the orchestrator rules first whether the 0 floor is part of the lock." : ""), owner: FF, depends_on: locked ? "orchestrator ruling on the locked rows (E6)" : null, check: "M1; D5" }); }
+-  if (id === "M4") return add(f, "M4", { ...base, what: "The clinical note quotes a number that is neither a bound of the row nor in its explanatory_numbers: correct the note, or declare the number in explanatory_numbers if it is right (C-27).", owner: FF, check: "M4" });
+-  if (id === "Q1") return null; // aggregated below
+-  return add(f, id, { ...base, what: "Failing check.", owner: CE, check: id });
+-}
+-for (const r of fresh.results) if (r.status === "fail") for (const fl of r.failures) checkItem(r.id, fl);
+-// D5 failures not already covered by a C21 item
+-for (const fl of res("D5").failures) {
+-  const f = famOfKey(fl.key); const mk = markerOf(fl.key);
+-  if (items[f].some((it) => it.kind === "C21" && String(it.row_key).startsWith(mk + "|"))) continue;
+-  add(f, "D5", { source: src("D5", fl.key), failure_key: String(fl.key), detail: String(fl.detail).slice(0, 300), what: "Difference from production without a documented reason.", owner: FF, check: "D5" });
+-}
+-addCentral("L2", { source: src("L2", `${res("L2").failures.length} failures`), what: `Action-limits table after WS3-18 (merged 57c3b33): ${res("L2").summary}. The failures left wait on the physician (AL-08.2 has no follow-up sentence; AL-12.3 and AL-12.4 have no stated number).`, owner: PH, also: [W3], package: "WS3-18 (merged), WS3-23, WS3-29", check: "L2" });
+-for (const [f, rk, txt] of [
+-  ["f18_electrolytes", "potassium|both|All Adults|none", "the table's potassium action limit starts at 5.0 mEq/L and the f18 row's at 5.1; and 'at or above' against 'above' for potassium 6.0"],
+-  ["f22_prostate", "psa_total|male|18-49|none", "the table says PSA 'below 1' and 'below 2' where the f22 rows say '1 or less' and '2 or less'"],
+-  ["f12_white_cells_core", "neutrophils_absolute|female|All Adults|none", "the f12 rows add a 1,000/µL neutrophil tier the table does not have (AL-14; the table also needs ancestry, which EVA does not record)"],
+-  ["f30_urine_pancreas_bilirubin", "total_bilirubin|both|18-59|none", "'at or above' against 'above' for bilirubin 15 mg/dL"],
+-]) add(f, "TABLE", { source: { file: "docs/signoff/work/ws3/README.md", key: "Wave 3 results, WS3-18: the table and the decided rows disagree" }, row_key: rk, what: `The action-limits table and the decided row disagree: ${txt}. The orchestrator settles which is right before the round (governance/action-limits.json, with the physician where it is clinical); the fixer then aligns the row, and WS3-29's equality script regenerates the copied limits.`, owner: CE, also: [FF, PH], check: "L2; G6" });
+-addCentral("S3", { source: src("S3", `${res("S3").failures.length} failures`), what: "Redundancy groups double counted on the fixture panels.", owner: W3, package: "WS3-09", check: "S3" });
+-addCentral("Q1", { source: src("Q1", `${res("Q1").failures.length} failures`), what: "36 healthy personas see a 'critical' code (an out-of-range value on a row with no critical field, mostly LDL above 100 mg/dL) and 4 pregnant or lactating personas see a category or a score: the classifier zones and the state path. No row message carries critical-tier wording any more (M3: 0 hits).", owner: W3, package: "WS3-11, WS3-15, WS3-17", check: "Q1" });
+-for (const id of ["C2", "C3", "E3", "E5", "M5", "P2", "P3", "S4", "S6", "G1", "G4", "G5", "G6", "G7", "G8"]) {
+-  const r = res(id); if (r.status !== "blocked") continue;
+-  const own = { C2: [W3, "WS3-17"], C3: [CE, "family pages, pack assembly (WS4)"], E3: [CE, "grade C decision table (docs/signoff/work/grade-c-table.json), then the physician signs or refuses each band"], E5: [CE, "blind re-audit"], M5: [CE, "final judges"], P2: [W3, "WS3-19"], P3: [EX, "Echevarne's lowest reportable values (C-07)"], S4: [W3, "WS3-09"], S6: [W3, "WS3-26"], G1: [CE, "round changes file"], G4: [CE, "WS4"], G5: [CE, "WS4"], G6: [CE, "WS4"], G7: [CE, "WS4"], G8: [CE, "WS4"] }[id];
+-  addCentral("blocked", { source: src(id, "blocked"), what: `Blocked check: ${String(r.summary).slice(0, 200)}`, owner: own[0], package: own[1], check: id });
+-}
++  // ─── the repository files ───
++  const famDoc = rj(path.join(W, "families.json"));
++  const F = famDoc.families;
++  const fams = Object.keys(F).sort();
++  const key = (r) => [r.marker_key, r.sex, r.age_group, r.physiological_state].join("|");
++  const k2f = {};
++  for (const f of fams) for (const k of F[f].keys) k2f[k] = f;
++  const short = (f) => f.slice(0, 3);
++  const res = (id) => fresh.results.find((r) => r.id === id) || { failures: [], status: "absent", summary: "absent" };
++  const lastRound = (f) => (F[f].batch === "B01" ? 4 : 2);
++  const DEC = {}, VER = {}, RES = {}, LED = {};
++  for (const f of fams) {
++    DEC[f] = rj(path.join(W, "decisions", f + ".json"));
++    VER[f] = rj(path.join(W, "verify", f + ".json"));
++    RES[f] = rj(path.join(W, "research", f + ".json"));
++    LED[f] = rj(path.join(W, "ledger", f + ".json"));
++  }
++  const APPROVED = rjIf(path.join(W, "governance/approved-changes.json")) || [];
++  const approvedAt = (file) => { const s = sha256File(path.join(ROOT, file)); return !!s && APPROVED.some((a) => a.file === file && a.sha256 === s && a.approved_by === "CEO"); };
++  const AL = (rj(path.join(W, "governance/action-limits.json")).entries) || [];
++  const alById = (id) => AL.find((e) => e.id === id) || null;
++  const CATALOGUE = "docs/vendor/echevarne/catalogo-2026-08-25.tsv";
++  const catLines = fs.existsSync(path.join(ROOT, CATALOGUE)) ? fs.readFileSync(path.join(ROOT, CATALOGUE), "utf8").split("\n") : [];
+ 
+-// ─── 4. hand-offs recorded by workstream 3, checked against the files of today ───
+-const HAND = "docs/signoff/work/ws3/README.md, 'WS1 hand-offs that WS3's checks wait on'";
+-const rulings = "docs/signoff/work/governance/fable-ws3-decisions.md";
+-const tab = {}; for (const e of rj(path.join(W, "governance/critical-limits.json")).entries) tab[e.marker_key] = e;
+-const closedHandoffs = [];
+-// 4a critical fields against the table
+-{
+-  const need = { calcium_serum: "f16_bone_mineral", potassium: "f18_electrolytes", sodium: "f18_electrolytes", total_bilirubin: "f30_urine_pancreas_bilirubin", tsh: "f15_thyroid" };
+-  for (const [mk, f] of Object.entries(need)) {
+-    const rs = DEC[f].final_rows.filter((r) => r.marker_key === mk); const e = tab[mk];
+-    const ok = rs.length && rs.every((r) => (r.critical_low ?? null) === (e.critical_low ?? null) && (r.critical_high ?? null) === (e.critical_high ?? null) && (e.none_because ? !!r.critical_none_reason : true));
+-    if (ok) closedHandoffs.push({ handoff: `critical fields or 'none, because' for ${mk} (${short(f)})`, status: "closed", evidence: `decisions/${f}.json rows equal governance/critical-limits.json; L1 reports ${res("L1").summary.split(";")[0]}` });
+-    else add(f, "HANDOFF", { source: { file: HAND, key: mk }, what: `Critical fields of ${mk} differ from critical-limits.json.`, owner: FF, check: "L1" });
++  const items = {}; // family -> []
++  const central = []; // items that belong to no family
++  for (const f of fams) items[f] = [];
++  const counters = {};
++  function add(f, kind, o) {
++    const k = `${short(f)}-${kind}`;
++    counters[k] = (counters[k] || 0) + 1;
++    const it = { id: `${k}-${String(counters[k]).padStart(2, "0")}`, family: f, kind, ...o };
++    if (!it.status) it.status = "open";
++    items[f].push(it);
++    return it;
+   }
+-  for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
+-    if (r.critical_low == null && r.critical_high == null) return;
+-    if (!tab[r.marker_key]) add(f, "HANDOFF", { source: { file: rulings, key: "D-18" , row: `decisions/${f}.json final_rows[${i}]` }, row_key: key(r), topic: "critical_limit_without_table_entry", what: `The row carries a critical limit (${r.critical_low ?? "none"} / ${r.critical_high ?? "none"} ${r.unit}) with no entry in critical-limits.json. Under D-18 it needs its own signed table entry or leaves the row. Recommended: the orchestrator adds the entry to the table for the physician's session 1 (urea mirrors BUN's 100 mg/dL); the fixer removes the field only if the entry is refused.`, owner: CE, also: [PH, FF], check: "L1 (as tightened by WS3-23)" });
+-    else {
++  function addCentral(kind, o) {
++    counters[kind] = (counters[kind] || 0) + 1;
++    const it = { id: `central-${kind}-${String(counters[kind]).padStart(2, "0")}`, family: null, kind, ...o };
++    if (!it.status) it.status = "open";
++    central.push(it);
++    return it;
++  }
++  const FF = "family_fixer", VF = "verifier", CE = "central", W3 = "ws3_package", PH = "physician", EX = "external";
++  const failureItem = {}; // "<check>|<failure key>" -> item id (the reconciliation of script-raised questions)
++
++  // The frozen row validator on a row with one proposed change: the errors the change would add (coordinator note 3).
++  function validatorRefuses(f, rowKey, field, to) {
++    const r = DEC[f].final_rows.find((x) => key(x) === rowKey);
++    if (!r) return null;
++    const before = [], after = [];
++    RC.checkRow(r, "row", before, []);
++    RC.checkRow({ ...r, [field]: to }, "row", after, []);
++    const added = after.filter((e) => !before.includes(e)).map((e) => e.replace(/^row \([^)]*\): /, ""));
++    return added.length ? added : null;
++  }
++  const VALIDATOR_FILE = "docs/signoff/tools/lib/row-checks.js";
++
++  // ─── state of the frozen-file changes and governance edits the rulings wait on ───
++  const LOCKED = ["apolipoprotein_b_apob", "ldl_cholesterol", "non_hdl_cholesterol", "homa_ir"];
++  const E6_FILE = "scripts/signoff/checks/evidence.ts";
++  const e6Text = fs.readFileSync(path.join(ROOT, E6_FILE), "utf8");
++  const e6BaselineNull = LOCKED.every((m) => new RegExp(`\\b${m}:\\s*\\{[^\\n]*?rows:\\s*\\[\\{[^\\n]*?normal_low:\\s*null`).test(e6Text));
++  const E6_APPROVED = e6BaselineNull && approvedAt(E6_FILE);
++  const UACR = "urine_albumin_creatinine_ratio";
++  const uacr = (() => {
++    const inFamilies = (F.f30_urine_pancreas_bilirubin?.keys || []).includes(UACR);
++    const mc = rjIf(path.join(W, "governance/marker-classes.json")) || {};
++    const m = mc.markers || mc.entries || mc;
++    const e = Array.isArray(m) ? m.find((x) => (x.marker_key || x.key) === UACR) : m[UACR];
++    const classC = !!e && (e.class ?? e.draft_class) === "c";
++    let staticOk = false;
++    try {
++      const S = require(path.join(ROOT, "docs/signoff/tools/inputs/static.js"));
++      staticOk = (S.CANDIDATE_UNMAPPED_CODES?.[UACR] || []).includes("B0848") && !(S.CANDIDATE_UNMAPPED_CODES?.microalbumin_urine || []).includes("B0848");
++    } catch { staticOk = false; }
++    const bi = fs.readFileSync(path.join(ROOT, "docs/signoff/tools/build-inputs.js"), "utf8");
++    const buildOk = !/urine_albumin_creatinine_ratio:\s*\{\s*key:\s*"microalbumin_urine"/.test(bi);
++    const staticApproved = approvedAt("docs/signoff/tools/inputs/static.js");
++    const buildApproved = approvedAt("docs/signoff/tools/build-inputs.js");
++    const ready = inFamilies && classC && staticOk && buildOk && staticApproved && buildApproved;
++    return { ready, key_in_families_json: inFamilies, class_c_in_marker_classes: classC, static_js_lists_B0848_under_the_key: staticOk, build_inputs_js_mapping_removed: buildOk, static_js_approved_at_current_sha256: staticApproved, build_inputs_js_approved_at_current_sha256: buildApproved };
++  })();
++  const ptrigger = (id) => `${alById(id)?.trigger || ""} ${alById(id)?.title_en || ""}`;
++  const PSA_EDITED = ["AL-15.1", "AL-15.2"].every((id) => alById(id) && /(≤|at or below)\s*[12]\s*ng/i.test(ptrigger(id)) && !/<\s*[12]\s*ng|below [12] ng/i.test(ptrigger(id)));
++  const NEUTRO_EDITED = AL.some((e) => (e.markers || []).includes("neutrophils_absolute") && !/^AL-14\.[12]$/.test(e.id) && /1[,.\s]?000/.test(e.trigger || "") && /500/.test(e.trigger || "")) && ["AL-14.1", "AL-14.2"].every((id) => /1[,.\s]?000/.test(alById(id)?.trigger || ""));
++  const K_TABLE = (() => { const m = String(alById("AL-09.1")?.trigger || "").match(/K\s*>\s*([\d.]+)/); return m ? Number(m[1]) : null; })();
++  const tab = {};
++  for (const e of rj(path.join(W, "governance/critical-limits.json")).entries) tab[e.marker_key] = e;
++  const M07 = { urea: "f03_kidney", magnesium_serum: "f18_electrolytes" };
++
++  // ─── 1. D-30 and M-01: rows the decision changed after the verifier's verdict, and the verifier's rows it dropped ───
++  const OPT = ["optimal_low", "optimal_high", "grade"];
++  const BOUND = ["reference_low", "reference_high", "critical_low", "critical_high", "band_rule", "unit", "marker_class", "reference_basis"];
++  const DEPTH = { optimal_bounds_or_grade: "bounds_or_grade", other_bound_class_or_band_rule: "reference", text_only: "texts_only", new_row: "new_row", dropped_row: "dropped_row" };
++  const unexplained = changes.changes.filter((x) => !x.reason);
++  const unexplainedByRow = {};
++  for (const x of unexplained) { const k = x.loop_row_key || x.row_key; (unexplainedByRow[k] = unexplainedByRow[k] || []).push(x); }
++  const reverdictRows = {};
++  const evidenceOf = (f) => ({ research: RES[f].evidence || [], verify: VER[f].evidence || [], decision: DEC[f].evidence || [] });
++  /** M-01 (3): optimal bounds whose only evidence record is the fixer's (decision file). */
++  function ownRecordNeeded(f, r) {
++    const ev = evidenceOf(f);
++    const out = [];
++    for (const b of ["optimal_low", "optimal_high"]) {
++      if (r[b] == null) continue;
++      const by = (list) => list.filter((e) => (e.supports || []).some((s) => s.row_key === key(r) && s.bound === b)).map((e) => e.id);
++      const prior = [...by(ev.research), ...by(ev.verify)], fixer = by(ev.decision);
++      if (!prior.length && fixer.length) out.push({ bound: b, value: r[b], fixer_records: fixer });
++    }
++    return out;
++  }
++  for (const f of fams) {
++    const vm = new Map(VER[f].final_rows.map((r, i) => [key(r), [r, i]]));
++    const dkeys = new Set(DEC[f].final_rows.map(key));
++    DEC[f].final_rows.forEach((r, i) => {
++      const hit = vm.get(key(r));
++      if (!hit) { add(f, "D30", { source: { file: `docs/signoff/work/decisions/${f}.json`, key: `final_rows[${i}] ${key(r)}` }, row_key: key(r), d30_class: "new_row", depth: "new_row", what: "Row the fixer added: no verifier verdict exists for it. It needs a research row (author) and a verifier verdict.", owner: VF, check: "E3; G2; D-02 (score eligibility)" }); return; }
++      const [v, j] = hit;
++      const ch = changedAfterVerdict(r, v);
++      if (!ch.length) return;
++      const opt = ch.filter((c) => OPT.includes(c));
++      const bnd = ch.filter((c) => BOUND.includes(c));
++      const cls = opt.length ? "optimal_bounds_or_grade" : bnd.length ? "other_bound_class_or_band_rule" : "text_only";
++      const diff = [...opt, ...bnd].map((c) => `${c} ${JSON.stringify(v[c] ?? null)} -> ${JSON.stringify(r[c] ?? null)}`);
++      const un = (unexplainedByRow[key(r)] || []).filter((x) => String(x.flag || "").startsWith("verdict on an earlier version"));
++      const own = cls === "optimal_bounds_or_grade" ? ownRecordNeeded(f, r) : [];
++      (reverdictRows[f] = reverdictRows[f] || []).push(key(r));
++      add(f, "D30", {
++        source: { file: `docs/signoff/work/decisions/${f}.json`, key: `final_rows[${i}] ${key(r)}`, compared_with: `docs/signoff/work/verify/${f}.json final_rows[${j}]` },
++        row_key: key(r), d30_class: cls, depth: DEPTH[cls], fields_changed_after_verdict: ch, bound_or_grade_changes: diff,
++        what: cls === "optimal_bounds_or_grade"
++          ? `Fresh verifier verdict and grade on the optimal bounds as compiled (${diff.join("; ")}). The verifier reads the whole row in English and Spanish, opens every source of the changed bound and assigns the grade itself (M-01 (1), (2)).${own.length ? ` The only evidence record of ${own.map((o) => `${o.bound} ${o.value} (${o.fixer_records.join(", ")})`).join(" and ")} is the fixer's: the verifier writes its own record from a source it opened, or corrects the row by removing the bound (M-01 (3)).` : ""}`
++          : cls === "other_bound_class_or_band_rule"
++            ? `Fresh verifier verdict on the row as compiled: a reference bound, basis, class or band rule changed after the verdict (${diff.join("; ")}). The verifier reads the whole row in English and Spanish and opens every source of the changed bound (M-01 (2)).`
++            : `Fresh verifier verdict on the row as compiled: only texts changed after the verdict (${ch.join(", ")}). The verifier checks each changed text against wording-rules.md, state-rules.md, critical-limits.json and the row's own numbers, and confirms that bounds, unit and grade are those of its own file (M-01 (2)).`,
++        own_record_needed: own.length ? own : undefined,
++        owner: VF,
++        check: cls === "optimal_bounds_or_grade" ? "E3 (the verifier assigns the grade); D-02 score eligibility; D6 change reasons (C-21)" : "D6 change reasons (C-21, CEO-6): the verdict documents the row again; G2",
++        closes_unexplained_changes: un.length,
++        ruling: cls === "optimal_bounds_or_grade" ? "D-30 as worded; M-01" : cls === "text_only" ? "M-01 (D-30 widened); CEO-6" : "M-01 (D-30 widened); CEO-6",
++      });
++    });
++    // WS3-09-F4: the verifier rows the decision dropped go to the round as rows changed after the verdict
++    VER[f].final_rows.forEach((v, j) => {
++      if (dkeys.has(key(v))) return;
++      add(f, "D30", {
++        source: { file: `docs/signoff/work/verify/${f}.json`, key: `final_rows[${j}] ${key(v)}`, compared_with: `docs/signoff/work/decisions/${f}.json (no decided row)` },
++        row_key: key(v), d30_class: "dropped_row", depth: "dropped_row", fields_changed_after_verdict: ["row"],
++        what: "The decision dropped this verifier row after the verdict (WS3-09-F4: a row changed after the verdict). Fresh verdict: if the drop is right under state rule 2.1 (D-12, M-05), refute the research row in row_verdicts and remove it from final_rows, with the reason in the note; if not, keep it and raise a physician question. The seal adds no row, and a restored row needs the fixer's change record (CEO-11).",
++        owner: VF, check: "D-30 (WS3-09-F4); G2", ruling: "WS3-09-F4; M-01",
++      });
++    });
++  }
++
++  // ─── 2. C-21: unexplained changes a fresh verdict does not close ───
++  const NEEDS_RECORD = /^(normal_|optimal_|critical_|unit_|row$)/;
++  for (const x of unexplained) {
++    if (String(x.flag || "").startsWith("verdict on an earlier version")) continue;
++    const f = x.family;
++    const rk = x.loop_row_key || x.row_key;
++    const d30 = (reverdictRows[f] || []).includes(rk);
++    const isRecord = NEEDS_RECORD.test(x.field) || /^(optimal|reference|critical)_(low|high)$/.test(x.field) || x.field === "row";
++    const nonRowColumn = ["panel_category", "is_genetic", "name_es", "name_en"].includes(x.field);
++    if (d30 && !isRecord && !nonRowColumn) continue; // closes with the fresh verdict (simulated: 277 -> 9)
++    add(f, "C21", {
++      source: { file: "changes.json of the compile of all 30 families (compile.js, run by build-items.cjs)", key: `${rk} ${x.field}` }, row_key: rk, field: x.field, from: x.from, to: x.to, direction: x.direction, flag: x.flag ? scrub(x.flag) : null,
++      what: nonRowColumn
++        ? `Change of ${x.field} (${JSON.stringify(x.from)} -> ${JSON.stringify(x.to)}) has no reason. The column is not one a family file supplies: the reason goes in docs/signoff/work/reconciliation/reasons.json, or the change is reverted in the compile.`
++        : x.field === "row"
++          ? `Production row ${rk} is removed without the decision's own record: add a changes[] entry with row_key, field "row", to null, a reason and evidence (CEO-11, C-02).`
++          : `Add a change record (reason, source${x.direction === "loosen" ? ", and a grade A or B evidence id: it is a loosening" : ""}) whose "to" is the compiled value, or restore the production value: ${x.field} ${JSON.stringify(x.from)} -> ${JSON.stringify(x.to)}. A fresh verdict never stands in for this record (M-01 (4); CEO-4, CEO-6, CEO-11).`,
++      owner: nonRowColumn ? CE : FF, check: "D6 (C-21); D5",
++    });
++  }
++
++  // ─── 3. the family's failing checks, on the committed check result over the compile of all 30 families ───
++  const allKeys = new Set(Object.keys(k2f));
++  const markerOf = (k) => { for (const s of String(k).split("|")) if (allKeys.has(s)) return s; return null; };
++  const famOfKey = (k) => { const s = String(k).split("|")[0]; if (F[s]) return s; const m = markerOf(k); return m ? k2f[m] : null; };
++  const K1_REL = { bun_creatinine: "f03_kidney", egfr_ckd_epi_2021: "f03_kidney", free_t_vermeulen: "f19_male_hormones", lymphocytes_absolute: "f12_white_cells_core", neutrophils_absolute: "f12_white_cells_core", nlr: "f12_white_cells_core", non_hdl: "f06_lipids_core", total_protein: "f01_albumin_proteins", homa_ir: "f05_glycaemia", tsat: "f14_iron" };
++  const src = (id, k) => ({ file: `${CHECKS_REL} (DSRT over the compile of all 30 families); latest stored result docs/signoff/work/checks/<family>-r<n>.json`, key: `${id} ${scrub(k)}` });
++  // A failure key names the compiled row: marker|sex|age label|...; a state row's label is its state ("Pregnancy",
++  // "Premenopausal (ovulatory)").
++  const decRowFor = (f, k) => {
++    const parts = String(k).split("|");
++    const rows = (DEC[f]?.final_rows || []).filter((r) => r.marker_key === parts[0] && r.sex === parts[1]);
++    const byAge = rows.find((r) => r.age_group === parts[2]);
++    if (byAge) return byAge;
++    const lab = String(parts[2] || "").toLowerCase();
++    const state = (lab.match(/\(([a-z]+)\)/) || [])[1] || lab;
++    return rows.find((r) => r.physiological_state === state) || null;
++  };
++  // A D3 failure on a row whose bounds equal the catalogue line it cites is a runner gap, not a row defect (coordinator, triage B10).
++  function catalogueEqual(r) {
++    if (!r) return null;
++    const m = String(r.reference_source || "").match(/\blines? (\d+)/);
++    if (!m || !catLines.length) return null;
++    const n = Number(m[1]);
++    const cols = String(catLines[n - 1] || "").split("\t");
++    if (cols.length < 13) return null;
++    const num = (s) => { const t = String(s || "").trim().replace(",", "."); if (!t) return { v: null }; const lt = t.match(/^<\s*([\d.]+)$/), gt = t.match(/^>\s*([\d.]+)$/); if (lt) return { lt: Number(lt[1]) }; if (gt) return { gt: Number(gt[1]) }; const x = Number(t); return Number.isFinite(x) ? { v: x } : { bad: t }; };
++    const lo = num(cols[11]), hi = num(cols[12]);
++    if (lo.bad || hi.bad) return null;
++    const catLow = lo.gt ?? lo.v ?? null, catHigh = lo.lt ?? hi.v ?? hi.lt ?? null;
++    const eq = (a, b) => (a == null && b == null) || (a != null && b != null && Math.abs(Number(a) - Number(b)) < 1e-9);
++    return { line: n, low: catLow, high: catHigh, equal: eq(r.reference_low, catLow) && eq(r.reference_high, catHigh) };
++  }
++  function checkItem(id, fl) {
++    const k = String(fl.key), d = scrub(String(fl.detail || ""));
++    const f = famOfKey(k);
++    const base = { source: src(id, k), failure_key: scrub(k), detail: d.slice(0, 400) };
++    const mark = (it) => { if (it) failureItem[`${id}|${k}`] = it.id; return it; };
++    if (id === "D1") return mark(addCentral("D1", { ...base, what: "The 'Biological Age' pseudo-row is still in the seed; a marker in no family has no retirement route (C-25, CEO-14).", owner: CE, check: "D1" }));
++    if (id === "D6") return mark(addCentral("D6", { ...base, what: "The reconciliation set (diff, forward, rollback, reader tests) is written by the single compile (C-03) and D6's own test needs tightening (C-26).", owner: CE, check: "D6" }));
++    if (id === "L1") return mark(addCentral("L1", { ...base, what: "The classifier derives 'critical' from reference limits (C-04).", owner: W3, package: "WS3-11, WS3-12, WS3-13", check: "L1" }));
++    if (id === "L2" || id === "S3" || id === "Q1") return null; // aggregated below
++    if (id === "P1") return mark(addCentral("P1", { ...base, what: "Pre-analytical inputs missing in the app.", owner: W3, package: "WS3-20, WS3-23", check: "P1" }));
++    if (id === "G2") { const m = k.split("|")[1]; const ff = k2f[m]; return mark(add(ff, "G2", { ...base, what: "An added row differs from the template row the compile picked for it (category or 'tested twice a year' column, which no family file supplies): fix the template pick or the column in the compile, or record the difference centrally.", owner: CE, check: "G2" })); }
++    if (id === "K1") { const relk = k.split("|")[1]; const ff = K1_REL[relk]; return mark(add(ff, "K1", { ...base, k1_kind: k.split("|")[0], what: k.startsWith("opposite") ? "Opposite-category pair on a derived relationship inside the family. Out of the round (M-09): no fixer moves a bound to change a coherence result; workstream 1-K decides, and a structural pair goes to the CEO as a question on the frozen test." : "One-step disagreement on a derived relationship: an accepted reason in coherence/accepted-reasons.json (C-13), workstream 1-K (M-09).", owner: CE, package: "WS1-K", check: "K1", ruling: "M-09" })); }
++    if (!f) return mark(addCentral(id, { ...base, what: "Not attributable to a family.", owner: CE, check: id }));
++    if (id === "N1") return mark(add(f, "N1", { ...base, what: "Population rule unresolved: a resolution in nhanes/n1-resolutions.json (C-14). The family's part, if any, is the 'reached by a minority' label and a physician question when more than 60% are non-optimal at 70 to 79.", owner: CE, package: "WS1-K", check: "N1" }));
++    if (id === "X1") return mark(add(f, "X1", { ...base, what: "Version 3 reads albumin above 48 g/L as favourable while the row marks it out of range: one judged exception entry (D-25, C-15). The laboratory's ceiling may not move to pass the check; the dye Echevarne uses is awaited (methods letter).", owner: W3, package: "WS3-24", check: "X1" }));
++    if (id === "S2") return mark(add(f, "S2", { ...base, what: "Scored set: classes, eligibility and groups are generated from the governance files and the verifier's grades.", owner: W3, package: "WS3-09", check: "S2" }));
++    if (id === "C1") {
++      if (/labelled_by_age_proxy/.test(k)) return mark(add(f, "C1", { ...base, what: "A 'Premenopausal' row is picked by age: accepted only in the narrow form of D-13 (no status recorded, flag set, note rendered).", owner: W3, package: "WS3-14, WS3-17", check: "C1" }));
++      return mark(add(f, "C1", { ...base, what: "State or cycle-phase row never picked: the app's picker and the runner's C1 do not read the declared state yet.", owner: W3, package: /Pregnancy|Lactation/.test(k) ? "WS3-14, WS3-15, WS3-17" : "WS3-14, WS3-16, WS3-17", check: "C1" }));
++    }
++    if (id === "D3") {
++      if (/no_catalogue_band/.test(k)) return mark(add(f, "D3", { ...base, what: "The state row is kept (M-05): for this marker it is the only place EVA holds Echevarne's printed interval for the state. D3 fails because the frozen runner looks for a catalogue band labelled by state; the requested change of D3 reads a state row against the catalogue band of its sex, with its own review and approval (known issue C-34). Change nothing on the row in this round. The physician is asked whether this interval is shown (D-12 question).", owner: CE, also: [PH], depends_on: "approved D3 change for state rows (C-34) and the physician's answer to D-12", check: "D3; C1", ruling: "M-05" }));
++      const r = decRowFor(f, k);
++      const cat = /\|(bounds|no_catalogue_row|band_split)$/.test(k) ? catalogueEqual(r) : null;
++      if (cat && cat.equal) return mark(add(f, "D3", { ...base, row_key: key(r), what: `Change nothing on the row: its bounds equal the catalogue line it cites (line ${cat.line}: ${cat.low ?? "none"} to ${cat.high ?? "none"}). D3 lists it because of how the frozen runner reads the catalogue (a unit label it does not match, an age written in a form it cannot parse, or an overlapping age band), not because the row departs from the line it cites: a D3 runner gap for central, whose change needs its own approval. Any open question to Echevarne stays where the row records it.`, owner: CE, also: [EX], check: "D3", rule: "D3 runner gap: the row equals its cited catalogue line" }));
++      if (/band_split/.test(k)) return mark(add(f, "D3", { ...base, what: "The row's age band spans two laboratory bands: cut the row at the laboratory's age (for example 18-20 and 21+), each with Echevarne's bounds.", owner: FF, needs: "new row keys: author stage and verifier verdict", check: "D3" }));
++      if (/no_catalogue_row/.test(k)) return mark(add(f, "D3", { ...base, what: "No catalogue row for this key in this unit: record reference_basis population or decision_limit with its source on the row, or correct the unit; if the catalogue mapping is wrong it is a central input fix.", owner: FF, check: "D3" }));
++      if (/uncovered_ages/.test(k)) return mark(add(f, "D3", { ...base, what: "The labelled row covers ages the catalogue band does not: state in the row's texts the age range the laboratory's band applies to, or record the basis for the ages outside it. Move no bound and add no row.", owner: FF, check: "D3" }));
++      return mark(add(f, "D3", { ...base, what: "Reference bounds differ from the catalogue without a recorded basis and source: record reference_basis and its source on the row. A bound moves only on evidence (LOOP-PROMPT.md 2.5).", owner: FF, check: "D3" }));
++    }
++    if (id === "D5") return null; // covered by the C21 items (same rows), listed below when not
++    if (id === "E1") {
++      if (/\|number$/.test(k)) return mark(add(f, "E1", { ...base, what: /pregnancy|lactation/.test(d) && !DEC[f].final_rows.some((r) => ["pregnancy", "lactation"].includes(r.physiological_state)) ? "The record supports a state row the decision removed: drop the stale supports[] link, or replace the quote with the exact sentence that holds the number." : "Replace the quote with the exact source sentence that holds the number (PubMed or PMC record), or state in the record's notes that the opened text does not hold it, so that the verifier applies the grade rule. The evidence pass changes no grade or verdict (M-13).", owner: FF, stage: "evidence pass (research and verify files)", check: "E1" }));
++      return mark(add(f, "E1", { ...base, what: "A sex, age or state split has no evidence record linked under the split's name: add the supports[] link, or the record, in the file named in the key (research, verify or decision).", owner: FF, stage: /\|decision\|/.test(k) ? "fixer (decision file)" : "evidence pass (research and verify files)", check: "E1" }));
++    }
++    if (id === "E2") {
++      if (/unopenable/.test(k) && /catalogo-2026/.test(d)) {
++        const m = d.match(/source (\w+):(\S+) not in the cache/);
++        let cached = false, cachePath = null;
++        if (m) { try { const ci = SRC.canonicalIdentifier({ type: m[1], value: m[2] }); const p = SRC.cachePaths(ci.key, path.join(W, "sources-cache")); cached = fs.existsSync(p.txt) && fs.existsSync(p.json); cachePath = rel(p.txt); } catch { cached = false; } }
++        return mark(add(f, "E2", { ...base, status: cached ? "closed" : "open", closed_evidence: cached ? `the source cache holds the catalogue text under this identifier (${cachePath}); E2 confirms the quote when it runs again (M-13)` : undefined, what: "The record cites Echevarne's catalogue by a repository URL the quote check cannot open. The orchestrator's cache step (M-13, before the rebuild) writes docs/vendor/echevarne/catalogo-2026-08-25.tsv into the source cache under this identifier, and E2 then confirms the quote. No record is dropped from a bound's support and no grade changes.", owner: CE, check: "E2", ruling: "M-13" }));
++      }
++      return mark(add(f, "E2", { ...base, what: /unopenable/.test(k) ? "Source not openable offline: the orchestrator first tries it online at the rebuild; if it is still unopenable, the evidence pass points the identifier to the PubMed or Europe PMC record of the same paper and quotes from it. The evidence pass changes no grade or verdict; if the source stays unopenable, the verifier regrades the record in the same session (M-13)." : "Quote not found in the source: copy the exact sentence that holds the number, or state in the record's notes that the number is not in the opened text. The evidence pass changes no grade or verdict; the verifier grades a corrected record in the same session (M-13).", owner: FF, also: [VF], stage: "evidence pass (research and verify files)", check: "E2 (needs 98% found)", ruling: "M-13" }));
++    }
++    if (id === "M1") {
++      const mk = markerOf(k);
++      const locked = LOCKED.includes(mk);
++      const r = (DEC[f].final_rows || []).find((x) => x.marker_key === mk && x.reference_low === 0) || null;
++      if (locked) return mark(add(f, "M1", { ...base, row_key: r ? key(r) : null, depends_on: "E6 baseline change approved (M-04)", what: E6_APPROVED ? "The E6 baseline change is approved (M-04): set the reference floor to none with a change record, and the verifier follows. Write no message for a 'below 0' zone and move no other number of the locked row." : "The reference floor of 0 stays in this round (M-04). It is not part of what the CEO locked, but it is part of check E6's frozen baseline (LOCKED_BASELINE in scripts/signoff/checks/evidence.ts), so it is removed only after the approved change of that baseline (its own Fable 5.2 review and an entry in approved-changes.json; known issue C-32): then by the fixer with a change record and a verifier verdict, in this round if the approval is merged at the rebuild, else in workstream 1-K. Until then M1 fails on this row. No message for a 'below 0' zone, no CEO question in questions/ceo-locked.md, and no other number of the locked row moves.", owner: E6_APPROVED ? FF : CE, also: E6_APPROVED ? [VF] : [FF, VF], check: "M1; E6", ruling: "M-04" }));
++      const refused = r ? validatorRefuses(f, key(r), "reference_low", null) : null;
++      if (refused) return mark(add(f, "M1", { ...base, row_key: key(r), proposed: { row_key: key(r), field: "reference_low", to: null }, validator_refuses: refused, what: `Setting the reference floor to none would leave the row with no reference bound, which the frozen row validator refuses (${VALIDATOR_FILE}: ${refused.join("; ")}); with no bound the row's only message sits on an unreachable zone. Central decides the route first (a row with no bound for a marker of this kind, or the families.json non_rows list); the fixer changes nothing on the row in this round.`, owner: CE, also: [FF], check: "M1; D5", rule: "a fixer item the frozen validator would refuse goes central" }));
++      return mark(add(f, "M1", { ...base, row_key: r ? key(r) : null, proposed: r ? { row_key: key(r), field: "reference_low", to: null } : undefined, what: "A reference floor of 0 makes a 'below range' zone reachable with no message. Set the floor to none with a change record, as f06 did for total cholesterol and triglycerides.", owner: FF, check: "M1; D5" }));
++    }
++    if (id === "M4") return mark(add(f, "M4", { ...base, what: "The clinical note quotes a number that is neither a bound of the row nor in its explanatory_numbers: correct the note, or declare the number in explanatory_numbers if it is right (C-27).", owner: FF, check: "M4" }));
++    return mark(add(f, id, { ...base, what: "Failing check.", owner: CE, check: id }));
++  }
++  for (const r of fresh.results) if (r.status === "fail") for (const fl of r.failures) checkItem(r.id, fl);
++  // D5 failures not already covered by a C21 item
++  for (const fl of res("D5").failures) {
++    const f = famOfKey(fl.key); const mk = markerOf(fl.key);
++    const covering = items[f].find((it) => it.kind === "C21" && String(it.row_key).startsWith(mk + "|"));
++    if (covering) { failureItem[`D5|${fl.key}`] = covering.id; continue; }
++    const it = add(f, "D5", { source: src("D5", fl.key), failure_key: scrub(String(fl.key)), detail: scrub(String(fl.detail)).slice(0, 300), what: "Difference from production without a documented reason.", owner: FF, check: "D5" });
++    failureItem[`D5|${fl.key}`] = it.id;
++  }
++  const l2 = addCentral("L2", { source: src("L2", `${res("L2").failures.length} failures`), what: `Action-limits table after WS3-18 (merged 57c3b33): ${scrub(res("L2").summary)}. The failures left wait on the physician (AL-08.2 has no follow-up sentence; AL-12.3 and AL-12.4 have no stated number).`, owner: PH, also: [W3], package: "WS3-18 (merged), WS3-23, WS3-29", check: "L2" });
++  for (const fl of res("L2").failures) failureItem[`L2|${fl.key}`] = l2.id;
++  // M-08: the four disagreements between the action-limits table and the rows
++  const strictCritical = (r, limit) => {
++    const texts = [...Object.values((r.messages || {}).en || {}), ...Object.values((r.messages || {}).es || {}), ...(r.action_limits || []).flatMap((a) => [a.name, a.condition, a.follow_up_en, a.follow_up_es]), r.critical_none_reason, r.clinical_notes_en, r.clinical_notes_es].filter((x) => typeof x === "string");
++    const n = String(limit).replace(/\.0$/, "");
++    const re = new RegExp(`(above|over|more than|greater than|exceeds?|por encima de|superior a|más de|supera)\\s+(${n}|${n}\\.0|${n},0)\\s*(mg/dL|mEq/L)(?!\\s+(or higher|o más|o superior))`, "i");
++    const upTo = new RegExp(`up to\\s+(${n}|${n}\\.0)\\s*(mg/dL|mEq/L)`, "i");
++    return texts.some((t) => re.test(t) || upTo.test(t));
++  };
++  const kRow = (DEC.f18_electrolytes?.final_rows || []).find((r) => r.marker_key === "potassium");
++  const kFirst = kRow ? Math.min(...(kRow.action_limits || []).filter((a) => a.direction === "above").map((a) => a.value)) : null;
++  const kAligned = !!kRow && K_TABLE != null && kFirst === K_TABLE && !strictCritical(kRow, 6.0);
++  const biliRows = (DEC.f30_urine_pancreas_bilirubin?.final_rows || []).filter((r) => r.marker_key === "total_bilirubin");
++  const biliAligned = biliRows.length > 0 && biliRows.every((r) => !strictCritical(r, 15));
++  const TABLE_SRC = { file: "docs/signoff/work/governance/action-limits.json; docs/signoff/work/ws3/README.md (WS3-18 results)", key: "the table and the decided rows disagree (ruling M-08)" };
++  add("f18_electrolytes", "TABLE", { source: TABLE_SRC, row_key: "potassium|both|All Adults|none", status: kAligned ? "closed" : "open", closed_evidence: kAligned ? "the row's first follow-up starts above the table's 5.0 mEq/L and no text states the critical comparison strictly" : undefined, what: `Align the potassium row to the table (M-08 (1), (4)). (1) The table stands: AL-09 starts above ${K_TABLE == null ? "5.0" : Number(K_TABLE).toFixed(1)} mEq/L. The row's first follow-up starts above 5.0 mEq/L (today ${kFirst ?? "none"}); its reference ceiling stays 5.1; its text says that 5.1 is still inside the laboratory's interval, and no text calls 5.1 out of range. (4) Potassium 6.0 mEq/L is critical at the limit itself (D-17): the row's action tiers end below 6.0, and every text that states the critical comparison says '6.0 mEq/L or higher' (es: 'o más'). Done together with the judge item f18_electrolytes--G6--potassium.both.All_Adults.none--high. The verifier then gives its verdict on the row.`, owner: FF, also: [VF, PH], check: "L2; G6", ruling: "M-08" });
++  add("f22_prostate", "TABLE", { source: TABLE_SRC, row_key: "psa_total|male|18-49|none", status: PSA_EDITED ? "closed" : "open", closed_evidence: PSA_EDITED ? "AL-15.1 and AL-15.2 now read 'at or below 1' and 'at or below 2 ng/mL' (M-08 (2))" : undefined, what: "The rows stand (M-08 (2)). The orchestrator changes AL-15.1 and AL-15.2 in governance/action-limits.json to 'at or below 1' and 'at or below 2 ng/mL', quoting the EAU recommendation sentence, before the rebuild, with the independent review of the M-07 and M-08 edits. Nothing for the fixer; the item closes when the table holds that wording.", owner: CE, also: [PH], check: "L2; G6", ruling: "M-08" });
++  add("f12_white_cells_core", "TABLE", { source: TABLE_SRC, row_key: "neutrophils_absolute|female|All Adults|none", status: NEUTRO_EDITED ? "closed" : "open", closed_evidence: NEUTRO_EDITED ? "the table holds the tier below 1,000/µL and above 500/µL, and AL-14.1 and AL-14.2 are bounded at 1,000/µL (M-08 (3))" : undefined, what: "The rows stand (M-08 (3)). The orchestrator adds to governance/action-limits.json the tier below 1,000/µL and above 500/µL for both sexes (urgency 'soon', with the rows' sources f12-E25, f12-E20 and f12-E23) and bounds AL-14.1 and AL-14.2 at 1,000/µL from below, so that the benign-variant note applies only from 1,000/µL up to the row's floor; ancestry stays in the sentence and is not a condition. Nothing for the fixer; the judge item f12_white_cells_core--L2--neutrophils_absolute.female.All_Adults.none--low then goes to f12's closing list.", owner: CE, also: [PH], check: "L2; G6", ruling: "M-08" });
++  add("f30_urine_pancreas_bilirubin", "TABLE", { source: TABLE_SRC, row_key: "total_bilirubin|both|18-59|none", status: biliAligned ? "closed" : "open", closed_evidence: biliAligned ? "no text of the bilirubin rows states the critical comparison strictly" : undefined, what: "Bilirubin 15 mg/dL is critical at the limit itself (M-08 (4), D-17). On the three total bilirubin rows the action tiers end below 15, and every text that states the critical comparison says '15 mg/dL or higher' (es: 'o más'); today the rows say 'values above 15 mg/dL are in the critical tier'. The verifier then gives its verdict on the rows.", owner: FF, also: [VF], check: "L2; G6", ruling: "M-08" });
++  const s3 = addCentral("S3", { source: src("S3", `${res("S3").failures.length} failures`), what: "Redundancy groups double counted on the fixture panels.", owner: W3, package: "WS3-09", check: "S3" });
++  for (const fl of res("S3").failures) failureItem[`S3|${fl.key}`] = s3.id;
++  const q1 = addCentral("Q1", { source: src("Q1", `${res("Q1").failures.length} failures`), what: "36 healthy personas see a 'critical' code (an out-of-range value on a row with no critical field, mostly LDL above 100 mg/dL) and 4 pregnant or lactating personas see a category or a score: the classifier zones and the state path. No row message carries critical-tier wording any more (M3: 0 hits).", owner: W3, package: "WS3-11, WS3-15, WS3-17", check: "Q1" });
++  for (const fl of res("Q1").failures) failureItem[`Q1|${fl.key}`] = q1.id;
++  const blockedItem = {};
++  for (const id of ["C2", "C3", "E3", "E5", "M5", "P2", "P3", "S4", "S6", "G1", "G4", "G5", "G6", "G7", "G8"]) {
++    const r = res(id); if (r.status !== "blocked") continue;
++    const own = { C2: [W3, "WS3-17"], C3: [CE, "family pages, pack assembly (WS4)"], E3: [CE, "grade C decision table (docs/signoff/work/grade-c-table.json), then the physician signs or refuses each band"], E5: [CE, "blind re-audit"], M5: [CE, "final judges"], P2: [W3, "WS3-19"], P3: [EX, "Echevarne's lowest reportable values (C-07)"], S4: [W3, "WS3-09"], S6: [W3, "WS3-26"], G1: [CE, "round changes file"], G4: [CE, "WS4"], G5: [CE, "WS4"], G6: [CE, "WS4"], G7: [CE, "WS4"], G8: [CE, "WS4; the count of G8 (known issue C-35, M-10)"] }[id];
++    blockedItem[id] = addCentral("blocked", { source: src(id, "blocked"), what: `Blocked check: ${scrub(String(r.summary)).slice(0, 200)}`, owner: own[0], package: own[1], check: id }).id;
++  }
++
++  // ─── 4. hand-offs recorded by workstream 3, checked against the files of today ───
++  const HAND = "docs/signoff/work/ws3/README.md, 'WS1 hand-offs that WS3's checks wait on'";
++  const rulings = "docs/signoff/work/governance/fable-ws3-decisions.md";
++  const closedHandoffs = [];
++  // 4a critical fields against the table
++  {
++    const need = { calcium_serum: "f16_bone_mineral", potassium: "f18_electrolytes", sodium: "f18_electrolytes", total_bilirubin: "f30_urine_pancreas_bilirubin", tsh: "f15_thyroid" };
++    for (const [mk, f] of Object.entries(need)) {
++      const rs = DEC[f].final_rows.filter((r) => r.marker_key === mk); const e = tab[mk];
++      const ok = rs.length && e && rs.every((r) => (r.critical_low ?? null) === (e.critical_low ?? null) && (r.critical_high ?? null) === (e.critical_high ?? null) && (e.none_because ? !!r.critical_none_reason : true));
++      if (ok) closedHandoffs.push({ handoff: `critical fields or 'none, because' for ${mk} (${short(f)})`, status: "closed", evidence: `decisions/${f}.json rows equal governance/critical-limits.json; L1 reports ${scrub(res("L1").summary).split(";")[0]}` });
++      else add(f, "HANDOFF", { source: { file: HAND, key: mk }, what: `Critical fields of ${mk} differ from critical-limits.json.`, owner: FF, check: "L1" });
++    }
++    for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
++      if (r.critical_low == null && r.critical_high == null) return;
++      const m07 = M07[r.marker_key] === f;
++      if (!tab[r.marker_key]) {
++        add(f, "HANDOFF", { source: { file: rulings, key: "D-18", row: `decisions/${f}.json final_rows[${i}]` }, row_key: key(r), topic: "critical_limit_without_table_entry", what: `The row carries a critical limit (${r.critical_low ?? "none"} / ${r.critical_high ?? "none"} ${r.unit}) with no entry in critical-limits.json (D-18). ${m07 ? `The orchestrator adds the entry to governance/critical-limits.json before the rebuild, as a proposal for the physician's session 1 (M-07: ${r.marker_key === "urea" ? "urea high 214 mg/dL, no low limit, with BUN's action class and sentences, citing the table's sources S3 and S4; urea and BUN give one call per sample" : "magnesium low 1.0 and high 4.9 mg/dL, from f18-E62, f18-E61 and f18-E13 with the conversion written in the entry, class 'today' with 'emergency' as the stated alternative, and the haemolysis note"}), with D-17's comparison and decimals fields and an independent claude-fable-5-2 review of every number. ` : "Under D-18 it needs its own signed table entry; the orchestrator proposes one for the physician. "}The fixer does not remove the limit. Once the entry is in the table, the row's critical-tier texts are aligned to the table's class and comparison; if the physician refuses the entry, the limit leaves the row as a signed change.`, owner: CE, also: [PH, FF], check: "L1 (as tightened by WS3-23)", ruling: m07 ? "M-07" : "D-18" });
++        return;
++      }
++      if (m07) add(f, "HANDOFF", { source: { file: rulings, key: "D-18", row: `decisions/${f}.json final_rows[${i}]` }, row_key: key(r), topic: "critical_limit_without_table_entry", status: "closed", closed_evidence: `governance/critical-limits.json holds an entry for ${r.marker_key} (M-07); its critical-tier texts are listed below for alignment`, what: "The table holds the entry (M-07).", owner: CE, check: "L1", ruling: "M-07" });
+       const cls = tab[r.marker_key].action_class;
+       for (const side of ["critical_low", "critical_high"]) {
+         const m = ((r.messages || {}).en || {})[side]; if (!m || r[side] == null) continue;
+-        if (cls === "emergency" && !/Go to an emergency department today/i.test(m)) add(f, "HANDOFF", { source: { file: rulings, key: "D-18", row: `decisions/${f}.json final_rows[${i}].messages.*.${side}` }, row_key: key(r), side, topic: "critical_message_weaker_than_table", what: "The row's critical-tier message closes with 'Contact a doctor today; if you cannot, go to an emergency department' where the table's action class is 'emergency' ('Go to an emergency department today'). Align it with the table's sentence in both languages, or drop the row's critical-tier message: under D-18 the app never shows it.", owner: FF, check: "L1; Q1 (critical wording equal to the signed table)" });
++        if (cls === "emergency" && !/Go to an emergency department today/i.test(m)) add(f, "HANDOFF", { source: { file: rulings, key: "D-18", row: `decisions/${f}.json final_rows[${i}].messages.*.${side}` }, row_key: key(r), side, topic: "critical_message_weaker_than_table", what: "The row's critical-tier message closes with 'Contact a doctor today; if you cannot, go to an emergency department' where the table's action class is 'emergency' ('Go to an emergency department today'). Align it with the table's sentence and comparison in both languages (a text that states the critical comparison says 'or higher' or 'or lower', D-17), or drop the row's critical-tier message: under D-18 the app never shows it.", owner: FF, check: "L1; Q1 (critical wording equal to the signed table)" });
+       }
+-    }
++    });
++  }
++  // 4b duplicates
++  closedHandoffs.push({ handoff: "duplicate calcium (f16) and DHEA-S 18-29 (f21) rows", status: "closed", evidence: `D1: ${scrub(res("D1").summary)}; C1 reports 0 both-vs-sex overlaps` });
++  // 4c state rows' messages against state rule 2.1 (M-05: held, not deleted)
++  for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
++    if (!["pregnancy", "lactation"].includes(r.physiological_state)) return;
++    const en = (r.messages || {}).en || {}; const sides = ["below_range", "above_range", "below_optimal", "above_optimal"].filter((s) => en[s]);
++    if (!sides.length) return;
++    add(f, "HANDOFF", { source: { file: rulings, key: "D-12 (WS1 hand-off), as amended by M-05", row: `decisions/${f}.json final_rows[${i}].messages` }, row_key: key(r), topic: "state_row_messages", what: `Under state rule 2.1 a declared pregnancy or lactation shows the laboratory's interval only, so this row's ${sides.join(" and ")} messages cannot be shown. They are held, not removed, in this round (M-05): they wait for the approved change of check M1 that treats the out-of-range zones of a pregnancy or lactation row as not reachable (known issue C-33, with the app's state rule of WS3-15 and WS3-16 in place) and for the physician's answer to D-12; then they go only for markers where he allows no exception, as a recorded change with a verifier verdict. Until then pack assembly prints on the row that under state rule 2.1 only the interval, the fixed note and the critical tier are shown, and that the out-of-range texts are held for his answer. The fixer changes no message and no row of pregnancy and lactation rows.`, owner: CE, also: [PH, FF], depends_on: "approved M1 change for state rows (C-33) and the physician's answer to D-12", check: "M1 (messages on unreachable zones); C2; Q1 rule 2", ruling: "M-05" });
+   });
+-}
+-// 4b duplicates
+-closedHandoffs.push({ handoff: "duplicate calcium (f16) and DHEA-S 18-29 (f21) rows", status: "closed", evidence: `D1: ${res("D1").summary}; C1 reports 0 both-vs-sex overlaps` });
+-// 4c state rows' messages against state-rules 2.1
+-for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
+-  if (!["pregnancy", "lactation"].includes(r.physiological_state)) return;
+-  const en = (r.messages || {}).en || {}; const sides = ["below_range", "above_range", "below_optimal", "above_optimal"].filter((s) => en[s]);
+-  if (!sides.length) return;
+-  add(f, "HANDOFF", { source: { file: rulings, key: "D-12 (WS1 hand-off)", row: `decisions/${f}.json final_rows[${i}].messages` }, row_key: key(r), topic: "state_row_messages", what: `Under state rule 2.1 a declared pregnancy or lactation shows the laboratory interval only, so this row's ${sides.join(" and ")} messages are unreachable: delete them (both languages), with a change record. ${r.reference_basis === "echevarne_interval" ? "" : "The row's basis is a guideline limit, not the laboratory's interval: under D-12 the value is then shown without an interval, and haemoglobin and ferritin are the exceptions the physician is asked about, so keep the deleted texts in the family's question file. "}If the physician amends 2.1 for the marker, the texts return as a signed change.`, owner: FF, depends_on: "physician (D-12 question) only for the exception", check: "M1 (messages on unreachable zones); C2; Q1 rule 2" });
+-});
+-// 4d uACR
+-if (!Object.keys(k2f).some((k) => /acr|albumin_creatinine/.test(k))) add("f30_urine_pancreas_bilirubin", "HANDOFF", { source: { file: HAND, key: "a uACR row in mg/g (f30)" }, topic: "uacr_row", what: "No row exists for the urine albumin-to-creatinine ratio in mg/g (Echevarne B0848, '<30 mg/g creat', catalogue line 52); f30 has only the concentration in mg/L, to which action limit AL-03 does not apply. A new marker key is needed first (families.json f30 keys, marker-classes.json, the catalogue mapping in the family input), then an author writes the row, the verifier grades it and the fixer brings it into the decision.", owner: CE, also: [FF, VF], needs: "new marker key (central, in the D-43 rebuild), then author stage and verifier verdict", check: "L2 (urine_acr)" });
+-// 4e vitamin D grade
+-{ const r = DEC.f16_bone_mineral.final_rows.find((x) => x.marker_key === "vitamin_d_25_oh"); const v = VER.f16_bone_mineral.row_verdicts.find((x) => x.row_key === key(r));
+-  closedHandoffs.push({ handoff: "vitamin D's grade (f16)", status: v && v.grade === r.grade && !changedAfterVerdict(r, VER.f16_bone_mineral.final_rows.find((x) => key(x) === key(r))).length ? "closed" : "open", evidence: `verifier grade ${v && v.grade}, row grade ${r.grade}, row unchanged since the verdict` }); }
+-// 4f RCV inputs
+-for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
+-  if (r.optimal_low == null && r.optimal_high == null) return;
+-  const rc = r.rcv || {};
+-  if (rc.rcv_pct != null) return;
+-  if (rc.cvi_pct == null) add(f, "HANDOFF", { source: { file: rulings, key: "D-23 (WS1 hand-off: RCV inputs)", row: `decisions/${f}.json final_rows[${i}].rcv` }, row_key: key(r), topic: "rcv_no_cvi", what: "The row has an optimal band and no within-person variation (CVI): add the CVI with its source (EFLM database or a published estimate), or state why none exists (a calculated value takes it from its components).", owner: FF, check: "P2" });
+-  else add(f, "HANDOFF", { source: { file: rulings, key: "D-23", row: `decisions/${f}.json final_rows[${i}].rcv` }, row_key: key(r), topic: "rcv_no_cva", what: "The row has a CVI and no analytical variation (CVA): Echevarne's figure is awaited (methods letter). No stand-in may be written unless the physician allows a sourced one (D-23 question).", owner: EX, also: [PH], check: "P2" });
+-});
+-// 4g albumin ceiling and dye
+-add("f01_albumin_proteins", "HANDOFF", { source: { file: HAND, key: "albumin's ceiling and dye (f01)" }, row_key: "albumin|both|All Adults|none", what: "Albumin's ceiling of 48 g/L and the dye Echevarne uses: nothing for the fixer. X1 closes by one judged exception (D-25, WS3-24), N1's 17.5% of young men outside by a WS1-K resolution, and the dye by the methods letter. The physician chooses between the exception and f01's stricter recommendation.", owner: W3, also: [EX, PH, CE], package: "WS3-24; WS1-K; methods letter", check: "X1; N1" });
+-// 4h f03 eGFR rows after WS3-28
+-DEC.f03_kidney.final_rows.forEach((r, i) => {
+-  if (r.marker_key !== "egfr_creatinine_based") return;
+-  add("f03_kidney", "HANDOFF", { source: { file: "docs/signoff/work/ws3/README.md", key: "WS3-28 (merged 131245a), D-28, D-37", row: `decisions/f03_kidney.json final_rows[${i}] method_note, messages, clinical_notes` }, row_key: key(r), topic: "egfr_text_after_ws3_28", what: "The row's texts say the app computes no eGFR and shows a laboratory eGFR as a value only. Since WS3-28 the app computes eGFR (CKD-EPI 2021, from creatinine, age at the draw and sex) and classifies only that one. Rewrite the method note, notes and messages to the rule as merged, in both languages; leave the sentence 'This marker does not count toward the score' as it is (it changes only if the physician admits the computed eGFR, D-06). The sentence for a laboratory's own eGFR moves to wording-rules.md section 7 (central, WS3-34).", owner: FF, also: [CE], check: "G6 (texts match the app); Q1; K1 texts" });
+-});
+-add("f03_kidney", "HANDOFF", { source: { file: rulings, key: "D-06 (WS1 hand-off)" }, what: "If the physician admits the computed eGFR to the score, f03's fixer changes the eGFR rows' 'This marker does not count toward the score' text. Not before.", owner: PH, also: [FF], check: "S2 (WS3-09 stops on a scored row that says it does not count)" });
+-// 4i identical state rows (D-13)
+-{
+-  const f = "f14_iron"; const rs = DEC[f].final_rows.filter((r) => r.marker_key === "ferritin" && ["premenopausal", "postmenopausal"].includes(r.physiological_state));
+-  const sig = (r) => [r.reference_low, r.reference_high, r.optimal_low, r.optimal_high, r.critical_low, r.critical_high].join(",");
+-  if (rs.length === 2 && sig(rs[0]) === sig(rs[1])) add(f, "HANDOFF", { source: { file: rulings, key: "D-13 (WS1 hand-off)", row: `decisions/${f}.json ferritin|female|All Adults|premenopausal and |postmenopausal` }, row_key: "ferritin|female|All Adults|premenopausal + postmenopausal", topic: "merge_identical_state_rows", what: `The premenopausal and postmenopausal ferritin rows hold the same bounds (${rs[0].reference_low} to ${rs[0].reference_high} ${rs[0].unit}): merge them into one row for women in no state, so the age-50 note does not show where the choice changes nothing. The merged row has a new key, so the author adds it to the research file, the verifier gives its verdict and the fixer records the two removals. TSAT's two rows differ (45 and 50%) and stay.`, owner: FF, needs: "new row key: author stage and verifier verdict", check: "C1 (labelled pick by age); D-13" });
+-}
+-// 4j out-of-range messages with critical-tier wording
+-closedHandoffs.push({ handoff: "out-of-range messages that still carry critical-tier wording (M3, Q1)", status: "closed for the rows and notes", evidence: `M3: ${res("M3").summary}. Q1's 36 'critical' codes come from the classifier, not from row text (WS3-11, WS3-17).` });
+-closedHandoffs.push({ handoff: "cycle-phase rows and the estradiol decision (f20)", status: "rows decided in B08; reachability waits on WS3-16 and WS3-17", evidence: "decisions/f20_female_hormones.json holds follicular, ovulatory, luteal and postmenopausal rows; C1's 16 unreachable f20 rows and the disputed items on the luteal days are listed as workstream 3 and central items" });
+-// stale app-state sentences
+-for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
+-  if (!/reference-row\.ts|Until [^.]{0,80} reads the declared state/i.test(JSON.stringify(r))) return;
+-  add(f, "TEXT", { source: { file: `docs/signoff/work/decisions/${f}.json`, key: `final_rows[${i}] ${key(r)}` }, row_key: key(r), what: "A text on the row describes the app's code as it was ('until reference-row.ts reads the declared state …'). State the rule the physician signs instead (state-rules.md), without naming the app's files; WS3-03 already reads the state and WS3-14 to WS3-16 will apply it.", owner: FF, check: "G6; Q1" });
+-});
+-// class a rows that would score but say they do not count
+-for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
+-  if (r.marker_class !== "a" || !["A", "B"].includes(r.grade) || (r.optimal_low == null && r.optimal_high == null)) return;
+-  if (!/does not count toward (the|your) (EVA )?score/i.test(JSON.stringify(r.messages || {}))) return;
+-  if (["egfr_creatinine_based", "cystatin_c"].includes(r.marker_key)) return; // D-06: no kidney marker scores yet; the sentence is right until the physician admits the computed eGFR
+-  add(f, "TEXT", { source: { file: rulings, key: "D-02 (WS3-09 stops on such a row)", row: `decisions/${f}.json final_rows[${i}]` }, row_key: key(r), what: "Class a row with a grade A or B band whose message says the marker does not count toward the score: WS3-09's generator stops on it. Decide with marker-classes.json which is right and correct the text or the class.", owner: FF, also: [CE], check: "S2" });
+-});
+-// marker class against governance
+-{
+-  const mc = rj(path.join(W, "governance/marker-classes.json")); const m = mc.markers || mc.entries || mc;
+-  const get = (k) => { const e = Array.isArray(m) ? m.find((x) => (x.marker_key || x.key) === k) : m[k]; return e && (e.class ?? e.draft_class); };
+-  const seen = new Set();
+-  for (const f of fams) for (const r of DEC[f].final_rows) { const g = get(r.marker_key); if (g === r.marker_class || seen.has(r.marker_key)) continue; seen.add(r.marker_key);
+-    add(f, "CLASS", { source: { file: "docs/signoff/work/governance/marker-classes.json", key: r.marker_key }, row_key: key(r), what: `The row's class (${r.marker_class}, from the verifier) differs from marker-classes.json (${g}). Under D-06 the class is taken from the verifier: the governance file is updated with WS3-09 and recorded in the decision register.`, owner: CE, package: "WS3-09 (marker-classes.json)", check: "S2; C-16" }); }
+-}
+-// C-29, C-22, C-23
+-{ const c = DEC.f05_glycaemia.changes.find((x) => /insulin_fasting/.test(x.row_key) && x.field === "reference_low" && !(x.evidence_ids || []).length);
+-  if (c) add("f05_glycaemia", "KNOWN", { source: { file: "docs/signoff/work/central/known-issues.md", key: "C-29" }, row_key: c.row_key, what: "The change record for insulin's reference floor (0 to none) names no evidence record: add the evidence id (Echevarne prints '<29.1' with no floor).", owner: FF, check: "D6" }); }
++  // 4d uACR (M-06)
++  if (!Object.keys(k2f).some((k) => /acr|albumin_creatinine/.test(k)) || !uacr.ready) add("f30_urine_pancreas_bilirubin", "HANDOFF", { source: { file: HAND, key: "a uACR row in mg/g (f30)" }, topic: "uacr_row", row_key: uacr.ready ? `${UACR}|both|All Adults|none` : undefined, new_row_keys: uacr.ready ? [`${UACR}|both|All Adults|none`] : undefined, what: uacr.ready ? "Author stage (M-06): add the urine albumin-to-creatinine ratio row in mg/g (Echevarne B0848, '<30 mg/g creat', catalogue line 52) to the research file; the fixer brings it into the decision with its change record and the verifier gives its verdict; lenses J1 and J2 read the new row (M-11)." : "No row for the urine albumin-to-creatinine ratio in mg/g (Echevarne B0848, '<30 mg/g creat', catalogue line 52); f30 has only the concentration in mg/L, to which AL-03 does not apply. In the round only if the rebuild commit holds the new key under f30 in families.json, its class c in marker-classes.json, and the approved changes to docs/signoff/tools/inputs/static.js and docs/signoff/tools/build-inputs.js with their entries in approved-changes.json (M-06; known issue C-36). Otherwise it stays this central item, AL-03 stays listed as 'not shown', and the row is written later as one recorded single-family pass before workstream 1-K's single compile. No agent writes the row before the key exists.", owner: uacr.ready ? FF : CE, also: uacr.ready ? [VF] : [FF, VF], needs: uacr.ready ? "new row key: author stage and verifier verdict" : "key, class, two approved tool changes", readiness: uacr, check: "L2 (urine_acr)", ruling: "M-06" });
++  // 4e vitamin D grade
++  { const r = DEC.f16_bone_mineral.final_rows.find((x) => x.marker_key === "vitamin_d_25_oh"); const v = VER.f16_bone_mineral.row_verdicts.find((x) => x.row_key === key(r));
++    closedHandoffs.push({ handoff: "vitamin D's grade (f16)", status: v && v.grade === r.grade && !changedAfterVerdict(r, VER.f16_bone_mineral.final_rows.find((x) => key(x) === key(r))).length ? "closed" : "open", evidence: `verifier grade ${v && v.grade}, row grade ${r.grade}, row unchanged since the verdict` }); }
++  // 4f RCV inputs
++  for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
++    if (r.optimal_low == null && r.optimal_high == null) return;
++    const rc = r.rcv || {};
++    if (rc.rcv_pct != null) return;
++    if (rc.cvi_pct == null) add(f, "HANDOFF", { source: { file: rulings, key: "D-23 (WS1 hand-off: RCV inputs)", row: `decisions/${f}.json final_rows[${i}].rcv` }, row_key: key(r), topic: "rcv_no_cvi", what: "The row has an optimal band and no within-person variation (CVI): add the CVI with its source (EFLM database or a published estimate), or state why none exists (a calculated value takes it from its components).", owner: FF, check: "P2" });
++    else add(f, "HANDOFF", { source: { file: rulings, key: "D-23", row: `decisions/${f}.json final_rows[${i}].rcv` }, row_key: key(r), topic: "rcv_no_cva", what: "The row has a CVI and no analytical variation (CVA): Echevarne's figure is awaited (methods letter). No stand-in may be written unless the physician allows a sourced one (D-23 question).", owner: EX, also: [PH], check: "P2" });
++  });
++  // 4g albumin ceiling and dye
++  add("f01_albumin_proteins", "HANDOFF", { source: { file: HAND, key: "albumin's ceiling and dye (f01)" }, row_key: "albumin|both|All Adults|none", what: "Albumin's ceiling of 48 g/L and the dye Echevarne uses: nothing for the fixer. X1 closes by one judged exception (D-25, WS3-24), N1's 17.5% of young men outside by a WS1-K resolution, and the dye by the methods letter. The physician chooses between the exception and f01's stricter recommendation.", owner: W3, also: [EX, PH, CE], package: "WS3-24; WS1-K; methods letter", check: "X1; N1" });
++  // 4h f03 eGFR rows after WS3-28
++  DEC.f03_kidney.final_rows.forEach((r, i) => {
++    if (r.marker_key !== "egfr_creatinine_based") return;
++    add("f03_kidney", "HANDOFF", { source: { file: "docs/signoff/work/ws3/README.md", key: "WS3-28 (merged 131245a), D-28, D-37", row: `decisions/f03_kidney.json final_rows[${i}] method_note, messages, clinical_notes` }, row_key: key(r), topic: "egfr_text_after_ws3_28", what: "The row's texts say the app computes no eGFR and shows a laboratory eGFR as a value only. Since WS3-28 the app computes eGFR (CKD-EPI 2021, from creatinine, age at the draw and sex) and classifies only that one. Rewrite the method note, notes and messages to the rule as merged, in both languages; leave the sentence 'This marker does not count toward the score' as it is (it changes only if the physician admits the computed eGFR, D-06). The sentence for a laboratory's own eGFR moves to wording-rules.md section 7 (central, WS3-34).", owner: FF, also: [CE], check: "G6 (texts match the app); Q1; K1 texts" });
++  });
++  add("f03_kidney", "HANDOFF", { source: { file: rulings, key: "D-06 (WS1 hand-off)" }, what: "If the physician admits the computed eGFR to the score, f03's fixer changes the eGFR rows' 'This marker does not count toward the score' text. Not before.", owner: PH, also: [FF], check: "S2 (WS3-09 stops on a scored row that says it does not count)" });
++  // 4i identical state rows (D-13)
++  {
++    const f = "f14_iron"; const rs = DEC[f].final_rows.filter((r) => r.marker_key === "ferritin" && ["premenopausal", "postmenopausal"].includes(r.physiological_state));
++    const sig = (r) => [r.reference_low, r.reference_high, r.optimal_low, r.optimal_high, r.critical_low, r.critical_high].join(",");
++    if (rs.length === 2 && sig(rs[0]) === sig(rs[1])) add(f, "HANDOFF", { source: { file: rulings, key: "D-13 (WS1 hand-off)", row: `decisions/${f}.json ferritin|female|All Adults|premenopausal and |postmenopausal` }, row_key: "ferritin|female|All Adults|premenopausal + postmenopausal", new_row_keys: ["ferritin|female|All Adults|none"], topic: "merge_identical_state_rows", what: `The premenopausal and postmenopausal ferritin rows hold the same bounds (${rs[0].reference_low} to ${rs[0].reference_high} ${rs[0].unit}): merge them into one row for women in no state, so the age-50 note does not show where the choice changes nothing. The merged row has a new key, so the author adds it to the research file, the verifier gives its verdict and the fixer records the two removals. TSAT's two rows differ (45 and 50%) and stay.`, owner: FF, needs: "new row key: author stage and verifier verdict", check: "C1 (labelled pick by age); D-13" });
++  }
++  // 4j out-of-range messages with critical-tier wording
++  closedHandoffs.push({ handoff: "out-of-range messages that still carry critical-tier wording (M3, Q1)", status: "closed for the rows and notes", evidence: `M3: ${scrub(res("M3").summary)}. Q1's 36 'critical' codes come from the classifier, not from row text (WS3-11, WS3-17).` });
++  closedHandoffs.push({ handoff: "cycle-phase rows and the estradiol decision (f20)", status: "rows decided in B08; reachability waits on WS3-16 and WS3-17", evidence: "decisions/f20_female_hormones.json holds follicular, ovulatory, luteal and postmenopausal rows; C1's 16 unreachable f20 rows and the disputed items on the luteal days are listed as workstream 3 and central items" });
++  // stale app-state sentences
++  for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
++    if (!/reference-row\.ts|Until [^.]{0,80} reads the declared state/i.test(JSON.stringify(r))) return;
++    add(f, "TEXT", { source: { file: `docs/signoff/work/decisions/${f}.json`, key: `final_rows[${i}] ${key(r)}` }, row_key: key(r), what: "A text on the row describes the app's code as it was ('until reference-row.ts reads the declared state …'). State the rule the physician signs instead (state-rules.md), without naming the app's files; WS3-03 already reads the state and WS3-14 to WS3-16 will apply it.", owner: FF, check: "G6; Q1" });
++  });
++  // class a rows that would score but say they do not count
++  for (const f of fams) DEC[f].final_rows.forEach((r, i) => {
++    if (r.marker_class !== "a" || !["A", "B"].includes(r.grade) || (r.optimal_low == null && r.optimal_high == null)) return;
++    if (!/does not count toward (the|your) (EVA )?score/i.test(JSON.stringify(r.messages || {}))) return;
++    if (["egfr_creatinine_based", "cystatin_c"].includes(r.marker_key)) return; // D-06: no kidney marker scores yet
++    add(f, "TEXT", { source: { file: rulings, key: "D-02 (WS3-09 stops on such a row)", row: `decisions/${f}.json final_rows[${i}]` }, row_key: key(r), what: "Class a row with a grade A or B band whose message says the marker does not count toward the score: WS3-09's generator stops on it. Decide with marker-classes.json which is right and correct the text or the class.", owner: FF, also: [CE], check: "S2" });
++  });
++  // marker class against governance
++  {
++    const mc = rj(path.join(W, "governance/marker-classes.json")); const m = mc.markers || mc.entries || mc;
++    const get = (k) => { const e = Array.isArray(m) ? m.find((x) => (x.marker_key || x.key) === k) : m[k]; return e && (e.class ?? e.draft_class); };
++    const seen = new Set();
++    for (const f of fams) for (const r of DEC[f].final_rows) { const g = get(r.marker_key); if (g === r.marker_class || seen.has(r.marker_key)) continue; seen.add(r.marker_key);
++      add(f, "CLASS", { source: { file: "docs/signoff/work/governance/marker-classes.json", key: r.marker_key }, row_key: key(r), what: `The row's class (${r.marker_class}, from the verifier) differs from marker-classes.json (${g}). Under D-06 the class is taken from the verifier: the governance file is updated with WS3-09 and recorded in the decision register.`, owner: CE, package: "WS3-09 (marker-classes.json)", check: "S2; C-16" }); }
++  }
++  // C-29
++  { const c = DEC.f05_glycaemia.changes.find((x) => /insulin_fasting/.test(x.row_key) && x.field === "reference_low" && !(x.evidence_ids || []).length);
++    if (c) add("f05_glycaemia", "KNOWN", { source: { file: "docs/signoff/work/central/known-issues.md", key: "C-29" }, row_key: c.row_key, what: "The change record for insulin's reference floor (0 to none) names no evidence record: add the evidence id (Echevarne prints '<29.1' with no floor).", owner: FF, check: "D6" }); }
+ 
+-// ─── 5. judge-raised blocking items still open in the ledgers (physician question or disputed) ───
+-function judgeOwner(x) {
+-  const s = x.summary, c = String(x.check_id).replace(/ /g, "_"), id = x.id;
+-  const o = (owner, what, extra = {}) => ({ owner, what, ...extra });
+-  if (id === "f22_prostate--definition:reference_interval--psa_free.male.All_Adults.none--low") return o(FF, "Free PSA carries a reference floor of 0 on the laboratory basis although Echevarne prints no limit: set the floor to none with a change record (also M1 and D5 on this row).");
+-  if (id === "f12_white_cells_core--definition:optimal_band--nlr.both.65-74.none--low") return o(FF, "NLR's optimal floor of 0.37 is derived from laboratory intervals, not from outcomes: remove it (or cite outcome evidence), then the verifier grades the four NLR rows.", { also: [VF] });
+-  if (id === "f12_white_cells_core--L2--neutrophils_absolute.female.All_Adults.none--low") return o(CE, "Action limit AL-14 starts at 1,000/µL on the row and at 500/µL in action-limits.json: the orchestrator settles which is right in the governance table; the fixer then aligns the row.", { also: [FF] });
+-  if (id === "f18_electrolytes--G6--potassium.both.All_Adults.none--high") return o(FF, "Potassium of exactly 6.0 mEq/L gets three different follow-ups (critical limit compared strictly, action limit AL-09b, above-range message): make the row's texts and its action limit agree on which tier 6.0 belongs to, equal to critical-limits.json.");
+-  if (id === "f18_electrolytes--M3--sodium.both.All_Adults.none--low") return o(CE, "The sodium action text in governance/action-limits.json applies a disease definition to the client: governance table wording (disputed).");
+-  if (/^f03_kidney--G6--(bun|urea)\./.test(id) && /Clinical_Notes|Clinical notes/i.test(s)) return o(CE, "Already fixed: the BUN and urea notes in decisions/f03_kidney.json no longer hold the sentence the judge quoted (read on the files of today). The ledger entry stays open only because the raising lens has not re-read it: it closes in the mop-up's closing pass or in the cold panel.", { closing_pass: true });
+-  if (/^f03_kidney--(G6|N1)--creatinine\.female/.test(id) && /21\.1|23\.8/.test(s)) return o(FF, "Three figures for the same share of healthy women aged 70 to 79 outside the creatinine interval: the method note still says 18% and question f03-DQ02 says 21.1%, while check N1 reports 23.8%. Quote one figure, with its source, in both places.");
+-  if (/^f03_kidney--E3--/.test(id)) return o(VF, "BUN and urea carry a grade C band whose grade the fixer lowered: the verifier grades the band as compiled (D-30); the band then goes to the grade C table for the physician.", { also: [CE, PH] });
+-  if (id === "f03_kidney--Q1--egfr_creatinine_based.both.18-39.none--low") return o(FF, "eGFR messages name CKD-EPI 2021 while the method note says the app computes none: closed by the f03 eGFR text hand-off after WS3-28 (disputed).");
+-  if (id === "f04_inflammation--Q1--hs_crp.both.All_Adults.none--none") return o(FF, "The hs-CRP method note describes the app's code as it was: state the rule instead (see the TEXT item on this row).");
+-  if (id === "f08_uric_acid_metabolic--E3--uric_acid.female.All_Adults.none--high" || id === "f06_lipids_core--E3--hdl_cholesterol.female.All_Adults.none--low") return o(VF, "A judge challenged the grade B of this optimal bound (single-source or laboratory-derived edge): add the row to the verifier's re-verdict list, so the grade is confirmed or lowered by the verifier and not by a fixer.", { also: [PH] });
+-  if (/^f23_omega3--/.test(id) || /^f27_.*--E3--/.test(id)) return o(PH, "Grade C band narrower than the reference interval (disputed): it goes to the grade C decision table, which the orchestrator builds and the physician signs or refuses.", { also: [CE] });
+-  if (/^f27_/.test(id) && /definition:reference_interval|N1/.test(c + id)) return o(PH, "Liposcale target or percentile used as the reference limit (disputed): the physician decides the basis of the f27 limits.");
+-  if (/^f27_/.test(id) && /age_groups/.test(c)) return o(CE, "No written policy for ages 18 to 19, 70 to 84 and 85 and over: family page (C3), pack assembly.");
+-  if (/definition:age_groups/.test(c)) return o(CE, "Older-adult and 18-19 policy not written: family page (C3); the physician sees the disputed item.", { also: [PH] });
+-  if (/^f19_.*definition:reference_interval/.test(id)) return o(PH, "Free testosterone reference interval from a population study against Echevarne's immunoassay inputs (disputed): physician question.");
+-  if (/^f19_.*--K1--/.test(id)) return o(CE, "Free testosterone against total testosterone, SHBG and albumin: K1 pattern for WS1-K; the reference basis is a physician question.", { package: "WS1-K", also: [PH] });
+-  if (/^f20_.*definition:physiological_state--anti_mullerian/.test(id)) return o(PH, "No AMH policy for the postmenopausal state (disputed): physician question; a row is added only if he asks for one.");
+-  if (/^f20_/.test(id) && /luteal|cycle|follicular|C1--estradiol\.female\.All_Adults/.test(id + s) && /definition:physiological_state|C1|C2/.test(c)) return o(CE, "The cycle days of each phase and the precedence between a recorded cycle day and the age-50 fallback are not written: state-rules.md section 5 (governance), then WS3-16 applies it.", { also: [W3], package: "state-rules.md; WS3-16" });
+-  if (/^f20_.*--C1--/.test(id) || /^f20_.*definition:physiological_state--fsh\.female\.All_Adults\.postmenopausal/.test(id)) return o(W3, "The '21+' rows outrank the postmenopausal rows in today's picker: the state-aware picker (D-13) reaches the labelled row from the recorded status, with age 50 as the flagged fallback.", { package: "WS3-14, WS3-17" });
+-  if (id === "f22_prostate--G6--psa_total.male.70plus.none--high") return o(CE, "Ages for the PSA 3 ng/mL follow-up differ between governance AL-02 and the f22 rows (disputed): settle in action-limits.json; the physician sees it.", { also: [PH] });
+-  if (id === "f26_other_vitamins--N1--vitamin_c_ascorbic_acid.both.All_Adults.none--low") return o(CE, "Vitamin C reference floor against NHANES: N1 resolution (WS1-K) or a physician question.", { package: "WS1-K", also: [PH] });
+-  if (c === "G6" || (c === "D5" && /biomarker-sources/.test(s))) return o(CE, "The published summaries in biomarker-sources.json contradict the rows (C-09, C-28): compile-sources.js, in repair; nothing for the family.");
+-  if (c === "K1") return o(CE, "K1 pattern inside the family (C-13): workstream 1-K decides (accepted reason, per-marker scale or physician question); the mop-up fixer moves no bound for it.", { package: "WS1-K" });
+-  if (c === "N1") return o(CE, "Population rule (C-14): a WS1-K resolution; the method difference is a physician question.", { package: "WS1-K", also: [PH] });
+-  if (c === "X1") return o(W3, "Albumin above 48 g/L: one judged exception (D-25).", { package: "WS3-24" });
+-  if (c === "C3") return o(CE, "Family page with the scope and the age policies: pack assembly (WS4).");
+-  if (c === "C2") return o(W3, "Pregnancy, lactation or oral-oestrogen handling is not applied by the app yet (C-08).", { package: "WS3-14, WS3-15, WS3-16" });
+-  if (c === "E2") return o(CE, "Raised when the source cache was empty (C-17, done); the quote check now runs. Disputed, stays listed.");
+-  if (/definition:(marker_classes|optimal_band)/.test(c) || (c === "M3" && /Optimal/.test(s))) return o(W3, "An in-range value on a row with no optimal band is labelled 'Optimal' by the classifier: in range becomes its own zone (D-14).", { package: "WS3-11, WS3-12" });
+-  return o(PH, "Open judge item: stays a physician question.");
+-}
+-for (const f of fams) for (const x of LED[f].issues) {
+-  if (x.source.lens === "script" || x.severity !== "blocking") continue;
+-  if (!["physician_question", "disputed", "unreviewed", "confirmed", "open"].includes(x.status)) continue;
+-  const j = judgeOwner(x);
+-  add(f, "JUDGE", { source: { file: `docs/signoff/work/ledger/${f}.json`, key: x.id, judge_file: x.source.judge_file }, ledger_status: x.status, lens: x.source.lens, raised_in_round: x.source.round, check_id: x.check_id, row_key: x.row_key, summary: String(x.summary).slice(0, 500), what: j.what, owner: j.owner, also: j.also || undefined, package: j.package || undefined, check: x.check_id, closing_pass: j.closing_pass || (j.owner === FF && x.status !== "disputed") || undefined, note: x.status === "disputed" ? "Disputed by the refuters: it stays on the physician's list unless its cause disappears; the mop-up does not settle it." : "Confirmed by both refuters and open at the round limit." });
+-}
++  // ─── 5. judge-raised blocking items still open in the ledgers (physician question or disputed) ───
++  // M-12: the stale f03 note items close only by their raising lens; the compiled files are searched for the whole phrase.
++  const STALE_PHRASES = ["starts at 15 mg/dL", "empieza en 15 mg/dL"];
++  const staleInCompile = STALE_PHRASES.filter((p) => ["biomarker-ranges-en.json", "rangos-biomarcadores-es.json"].some((f) => seedText[f].toString("utf8").includes(p)));
++  function judgeOwner(x) {
++    const s = x.summary, c = String(x.check_id).replace(/ /g, "_"), id = x.id;
++    const o = (owner, what, extra = {}) => ({ owner, what, ...extra });
++    if (id === "f22_prostate--definition:reference_interval--psa_free.male.All_Adults.none--low") {
++      const rk = "psa_free|male|All Adults|none";
++      const refused = validatorRefuses("f22_prostate", rk, "reference_low", null);
++      if (refused) return o(CE, `Free PSA carries a reference floor of 0 on the laboratory basis although Echevarne prints no limit. Setting it to none would leave the row with no reference bound, which the frozen row validator refuses (${VALIDATOR_FILE}: ${refused.join("; ")}); central decides the route first (see the M1 item on this row). The fixer changes nothing on the row in this round.`, { plan_owner: FF, validator_refuses: refused, proposed: { row_key: rk, field: "reference_low", to: null }, rule: "a fixer item the frozen validator would refuse goes central" });
++      return o(FF, "Free PSA carries a reference floor of 0 on the laboratory basis although Echevarne prints no limit: set the floor to none with a change record (also M1 and D5 on this row).");
++    }
++    if (id === "f12_white_cells_core--definition:optimal_band--nlr.both.65-74.none--low") return o(VF, "NLR's optimal floor of 0.37 rests only on the fixer's evidence record and is derived from laboratory intervals, not outcomes: the verifier writes its own record from a source it opened, or corrects the four NLR rows by removing the floor (M-01 (3)); the seal records a removal from the verifier's corrections[] with a change record.", { plan_owner: FF, also: [FF], ruling: "M-01" });
++    if (id === "f12_white_cells_core--L2--neutrophils_absolute.female.All_Adults.none--low") return NEUTRO_EDITED ? o(CE, "Settled by M-08 (3): the table now holds the tier below 1,000/µL and AL-14 is bounded at 1,000/µL; the rows stand. Closed only by the raising lens in the closing pass.", { closing_pass: true, ruling: "M-08" }) : o(CE, "Settled by M-08 (3): the rows stand and the table gains the tier below 1,000/µL (f12-TABLE-01, central). The item goes to f12's closing list once the table is edited.", { ruling: "M-08" });
++    if (id === "f18_electrolytes--G6--potassium.both.All_Adults.none--high") return o(FF, "Potassium of exactly 6.0 mEq/L gets three different follow-ups (critical limit compared strictly, action limit AL-09b, above-range message). Done with f18-TABLE-01 (M-08 (1) and (4)): 6.0 is critical at the limit itself, the action tiers end below 6.0, and every text that states the comparison says '6.0 mEq/L or higher'.", { ruling: "M-08" });
++    if (id === "f18_electrolytes--M3--sodium.both.All_Adults.none--low") return o(CE, "The sodium action text in governance/action-limits.json applies a disease definition to the client: governance table wording (disputed).");
++    if (/^f03_kidney--G6--(bun|urea)\./.test(id) && /Clinical_Notes|Clinical notes/i.test(s)) {
++      if (staleInCompile.length) return o(FF, `Not fixed: the compiled seed files still contain '${staleInCompile.join("', '")}' (whole phrase searched, M-12). Correct the note, in both languages.`, { ruling: "M-12", closing_pass: true });
++      return o(CE, `Already fixed: the compiled seed files of the compile of all 30 families hold neither '${STALE_PHRASES.join("' nor '")}' (whole phrase searched, M-12); the BUN and urea notes in decisions/f03_kidney.json no longer hold the sentence the judge quoted. Only the raising lens closes it, in the closing pass (M-12); if it raises it again, it stays open.`, { closing_pass: true, ruling: "M-12" });
++    }
++    if (/^f03_kidney--(G6|N1)--creatinine\.female/.test(id) && /21\.1|23\.8/.test(s)) return o(FF, "Three figures for the same share of healthy women aged 70 to 79 outside the creatinine interval: the method note still says 18% and question f03-DQ02 says 21.1%, while check N1 reports 23.8%. Quote one figure, with its source, in both places.");
++    if (/^f03_kidney--E3--/.test(id)) return o(VF, "A judge challenged the grade of the BUN and urea grade C band, which the fixer lowered: the verifier grades the band as compiled (D-30, M-01 'challenged grade'); the band then goes to the grade C table for the physician.", { also: [CE, PH], challenged_grade: true });
++    if (id === "f03_kidney--Q1--egfr_creatinine_based.both.18-39.none--low") return o(FF, "eGFR messages name CKD-EPI 2021 while the method note says the app computes none: closed by the f03 eGFR text hand-off after WS3-28 (disputed).");
++    if (id === "f04_inflammation--Q1--hs_crp.both.All_Adults.none--none") return o(FF, "The hs-CRP method note describes the app's code as it was: state the rule instead (see the TEXT item on this row).");
++    if (id === "f08_uric_acid_metabolic--E3--uric_acid.female.All_Adults.none--high" || id === "f06_lipids_core--E3--hdl_cholesterol.female.All_Adults.none--low") return o(VF, "A judge challenged the grade B of this optimal bound (single-source or laboratory-derived edge): the row goes on the verifier's list at the depth of a challenged grade (M-01), so the grade is confirmed or lowered by the verifier and not by a fixer.", { also: [PH], challenged_grade: true });
++    if (/^f23_omega3--/.test(id) || /^f27_.*--E3--/.test(id)) return o(PH, "Grade C band narrower than the reference interval (disputed): it goes to the grade C decision table, which the orchestrator builds and the physician signs or refuses.", { also: [CE] });
++    if (/^f27_/.test(id) && /definition:reference_interval|N1/.test(c + id)) return o(PH, "Liposcale target or percentile used as the reference limit (disputed): the physician decides the basis of the f27 limits.");
++    if (/^f27_/.test(id) && /age_groups/.test(c)) return o(CE, "No written policy for ages 18 to 19, 70 to 84 and 85 and over: family page (C3), pack assembly.");
++    if (/definition:age_groups/.test(c)) return o(CE, "Older-adult and 18-19 policy not written: family page (C3); the physician sees the disputed item.", { also: [PH] });
++    if (/^f19_.*definition:reference_interval/.test(id)) return o(PH, "Free testosterone reference interval from a population study against Echevarne's immunoassay inputs (disputed): physician question.");
++    if (/^f19_.*--K1--/.test(id)) return o(CE, "Free testosterone against total testosterone, SHBG and albumin: K1 pattern for WS1-K (M-09); the reference basis is a physician question.", { package: "WS1-K", also: [PH] });
++    if (/^f20_.*definition:physiological_state--anti_mullerian/.test(id)) return o(PH, "No AMH policy for the postmenopausal state (disputed): physician question; a row is added only if he asks for one.");
++    if (/^f20_/.test(id) && /luteal|cycle|follicular|C1--estradiol\.female\.All_Adults/.test(id + s) && /definition:physiological_state|C1|C2/.test(c)) return o(CE, "The cycle days of each phase and the precedence between a recorded cycle day and the age-50 fallback are not written: state-rules.md section 5 (governance), then WS3-16 applies it.", { also: [W3], package: "state-rules.md; WS3-16" });
++    if (/^f20_.*--C1--/.test(id) || /^f20_.*definition:physiological_state--fsh\.female\.All_Adults\.postmenopausal/.test(id)) return o(W3, "The '21+' rows outrank the postmenopausal rows in today's picker: the state-aware picker (D-13) reaches the labelled row from the recorded status, with age 50 as the flagged fallback.", { package: "WS3-14, WS3-17" });
++    if (id === "f22_prostate--G6--psa_total.male.70plus.none--high") return o(CE, "Ages for the PSA 3 ng/mL follow-up differ between governance AL-02 and the f22 rows (disputed): settle in action-limits.json; the physician sees it.", { also: [PH] });
++    if (id === "f26_other_vitamins--N1--vitamin_c_ascorbic_acid.both.All_Adults.none--low") return o(CE, "Vitamin C reference floor against NHANES: N1 resolution (WS1-K) or a physician question.", { package: "WS1-K", also: [PH] });
++    if (c === "G6" || (c === "D5" && /biomarker-sources/.test(s))) return o(CE, "The published summaries in biomarker-sources.json contradict the rows (C-09, C-28): compile-sources.js, in repair; nothing for the family.");
++    if (c === "K1") return o(CE, "K1 pattern inside the family (C-13): workstream 1-K decides (accepted reason, per-marker scale or physician question); the mop-up fixer moves no bound for it (M-09).", { package: "WS1-K" });
++    if (c === "N1") return o(CE, "Population rule (C-14): a WS1-K resolution; the method difference is a physician question.", { package: "WS1-K", also: [PH] });
++    if (c === "X1") return o(W3, "Albumin above 48 g/L: one judged exception (D-25).", { package: "WS3-24" });
++    if (c === "C3") return o(CE, "Family page with the scope and the age policies: pack assembly (WS4).");
++    if (c === "C2") return o(W3, "Pregnancy, lactation or oral-oestrogen handling is not applied by the app yet (C-08).", { package: "WS3-14, WS3-15, WS3-16" });
++    if (c === "E2") return o(CE, "Raised when the source cache was empty (C-17, done); the quote check now runs. Disputed, stays listed.");
++    if (/definition:(marker_classes|optimal_band)/.test(c) || (c === "M3" && /Optimal/.test(s))) return o(W3, "An in-range value on a row with no optimal band is labelled 'Optimal' by the classifier: in range becomes its own zone (D-14).", { package: "WS3-11, WS3-12" });
++    return o(PH, "Open judge item: stays a physician question.");
++  }
++  const judgeItem = {}; // ledger id -> item
++  for (const f of fams) for (const x of LED[f].issues) {
++    if (x.source.lens === "script" || x.severity !== "blocking") continue;
++    if (!["physician_question", "disputed", "unreviewed", "confirmed", "open"].includes(x.status)) continue;
++    const j = judgeOwner(x);
++    const planOwner = j.plan_owner || j.owner;
++    const it = add(f, "JUDGE", { source: { file: `docs/signoff/work/ledger/${f}.json`, key: x.id, judge_file: scrub(x.source.judge_file) }, ledger_id: x.id, ledger_status: x.status, lens: x.source.lens, raised_in_round: x.source.round, check_id: x.check_id, row_key: x.row_key, summary: scrub(String(x.summary)).slice(0, 500), what: j.what, owner: j.owner, also: j.also || undefined, package: j.package || undefined, check: x.check_id, closing_pass: j.closing_pass || (planOwner === FF && j.owner !== CE && x.status !== "disputed") || undefined, challenged_grade: j.challenged_grade || undefined, validator_refuses: j.validator_refuses, proposed: j.proposed, rule: j.rule, ruling: j.ruling, note: x.status === "disputed" ? "Disputed by the refuters: it stays on the physician's list unless its cause disappears; the mop-up does not settle it." : "Confirmed by both refuters and open at the round limit." });
++    judgeItem[x.id] = it;
++  }
++
++  // ─── 6. minor judge items finalised as physician questions (now triaged: M-10) ───
++  const minor = {};
++  for (const f of fams) minor[f] = LED[f].issues.filter((x) => x.source.lens !== "script" && x.severity === "minor" && x.status === "physician_question").map((x) => ({ ledger_id: x.id, lens: x.source.lens, check_id: x.check_id, row_key: x.row_key, summary: scrub(String(x.summary)).slice(0, 220) }));
++
++  // ─── 7. M-12: the stale sentence in the urea row's notes (English only) ───
++  {
++    const f = "f03_kidney";
++    const SENT = "The seed Clinical_Notes of this marker (outside this file) still say the interval starts at 15 mg/dL and name all-cause mortality; replacement text is in this decision's notes.";
++    DEC[f].final_rows.forEach((r, i) => {
++      if (r.marker_key !== "urea" || !String(r.notes || "").includes("still say the interval starts at 15 mg/dL")) return;
++      add(f, "TEXT", { source: { file: `docs/signoff/work/decisions/${f}.json`, key: `final_rows[${i}].notes ${key(r)}` }, row_key: key(r), topic: "stale_notes_sentence", what: `Delete this sentence from the notes field of the urea row (English only; the field has no Spanish twin): '${SENT}' It is no longer true: the compiled urea note does not hold the old text (M-12). Change nothing else; the judge items f03-JUDGE-04, -05 and -10 stay on f03's closing list.`, owner: FF, check: "G6 (texts match the files)", ruling: "M-12" });
++    });
++  }
++
++  // ─── 8. M-13: the catalogue records the verifier graded D, and stale supports links ───
++  const CAT_ID = /catalogo-2026-08-25\.tsv/;
++  for (const f of fams) {
++    const vv = new Map((VER[f].evidence_verdicts || []).map((v) => [v.evidence_id, v]));
++    const recs = (RES[f].evidence || []).filter((e) => CAT_ID.test(JSON.stringify(e.identifier || {})) && vv.get(e.id)?.grade === "D");
++    if (!recs.length) continue;
++    const notUnopenable = recs.filter((e) => !/unopenable|cannot open|could not open|not openable|cannot fetch|404/i.test(vv.get(e.id).note || "")).map((e) => e.id);
++    add(f, "REGRADE", { source: { file: `docs/signoff/work/verify/${f}.json`, key: `evidence_verdicts: ${recs.map((e) => e.id).join(", ")}` }, evidence_ids: recs.map((e) => e.id), what: `The verifier re-reads these ${recs.length} records of Echevarne's catalogue (${recs.map((e) => e.id).join(", ")}), graded D because the quote check could not open the repository URL, and sets the grade itself now that the cache step (M-13) lets the check open the catalogue. The evidence pass changes no grade.${notUnopenable.length ? ` The verdict notes of ${notUnopenable.join(", ")} do not name the unopenable source as the reason: the verifier reads the note first.` : ""}`, owner: VF, check: "E2; E3", ruling: "M-13" });
++  }
++  const BOUNDS = ["reference_low", "reference_high", "optimal_low", "optimal_high", "critical_low", "critical_high"];
++  for (const f of fams) {
++    const drows = new Map(DEC[f].final_rows.map((r) => [key(r), r]));
++    const links = [], kept = [];
++    for (const kind of ["research", "verify"]) {
++      const doc = kind === "research" ? RES[f] : VER[f];
++      const rows = kind === "research" ? doc.rows : doc.final_rows;
++      const recs = kind === "research" ? doc.evidence || [] : [...(RES[f].evidence || []), ...(doc.evidence || [])];
++      const base = []; RC.checkBoundCoverage(rows, recs, "x", base);
++      for (const e of doc.evidence || []) (e.supports || []).forEach((s, si) => {
++        if (!BOUNDS.includes(s.bound)) return;
++        const r = drows.get(s.row_key);
++        if (r && r[s.bound] != null) return;
++        const recs2 = recs.map((x) => (x.id !== e.id ? x : { ...x, supports: x.supports.filter((_, j) => j !== si) }));
++        const errs = []; RC.checkBoundCoverage(rows, recs2, "x", errs);
++        const entry = { file: `docs/signoff/work/${kind}/${f}.json`, evidence_id: e.id, row_key: s.row_key, bound: s.bound, why: r ? "the decided row's bound is now none" : "the decided rows no longer hold this row" };
++        if (errs.length > base.length) kept.push({ ...entry, kept_because: "its own file's row still needs it (frozen coverage check)" }); else links.push(entry);
++      });
++    }
++    if (links.length) add(f, "LINKS", { source: { file: `docs/signoff/work/research/${f}.json; verify/${f}.json`, key: "evidence[].supports" }, links, links_kept: kept.length ? kept : undefined, what: `Evidence pass (M-13): remove ${links.length} supports[] links to rows the decision no longer holds or to bounds that are now none, after the builder checked that the row or bound is gone and that removing the link leaves the record's own file valid under the frozen coverage check. Change no quote, grade, verdict or row; the verifier sees the changed records in the same session.`, owner: FF, stage: "evidence pass (research and verify files)", check: "E1; E2 (records)", ruling: "M-13" });
++  }
++
++  // ─── 9. records without a verifier verdict (coordinator note on f06, f28, f29) ───
++  const VERDICT_REASON = "The frozen verify validator accepts evidence_verdicts only for research records (docs/signoff/tools/validate.js, semanticVerify: 'evidence_verdicts: verdict for unknown evidence <id>'; tried on f28-VE01, the file becomes INVALID). A verdict for a record the verifier or the fixer wrote would make the verify file invalid, so the verifier cannot grade these records in the round, and the compile publishes them with grade null ('not in the verifier's verdicts'). Central: a frozen-tool change (the compile reads the verifier's own record's grade, or the validator accepts a verdict on a verify or decision record), with its own review and approval.";
++  for (const f of fams) {
++    const vv = new Set((VER[f].evidence_verdicts || []).map((v) => v.evidence_id));
++    const vrec = (VER[f].evidence || []).filter((e) => !vv.has(e.id)).map((e) => e.id);
++    const drec = (DEC[f].evidence || []).filter((e) => !vv.has(e.id)).map((e) => e.id);
++    if (!vrec.length && !drec.length) continue;
++    add(f, "VERDICT", { source: { file: `docs/signoff/work/verify/${f}.json evidence_verdicts`, key: "records with no verdict" }, verifier_records: vrec.length ? vrec : undefined, fixer_records: drec.length ? drec : undefined, what: `${vrec.length ? `Records the verifier wrote with no evidence_verdicts entry: ${vrec.join(", ")}. ` : ""}${drec.length ? `Records the fixer wrote with no verdict: ${drec.join(", ")}. ` : ""}${VERDICT_REASON}`, owner: CE, also: [VF], check: "E3; G6 (published grade)", rule: "a verifier item the frozen validator would refuse goes central" });
++  }
+ 
+-// ─── 6. minor judge items finalised as physician questions (not in the round's scope) ───
+-const minor = {};
+-for (const f of fams) minor[f] = LED[f].issues.filter((x) => x.source.lens !== "script" && x.severity === "minor" && x.status === "physician_question").map((x) => ({ ledger_id: x.id, lens: x.source.lens, check_id: x.check_id, row_key: x.row_key, summary: String(x.summary).slice(0, 220) }));
++  // ─── 10. triage (M-10) and the orchestrator's routes ───
++  const triageSchemaFile = path.join(W, "mopup/triage-schema.json");
++  const triageSchema = rj(triageSchemaFile);
++  const routesDoc = rjIf(routesFile);
++  const ROUTES = routesDoc ? (routesDoc.routes && typeof routesDoc.routes === "object" ? routesDoc.routes : Object.fromEntries(Object.entries(routesDoc).filter(([k]) => !k.startsWith("_")))) : {};
++  for (const [id, r] of Object.entries(ROUTES)) if (!["fixer", "evidence_pass", "verifier", "central"].includes(r?.route)) errors.push(`${rel(routesFile)}: ${id}: route must be fixer, evidence_pass, verifier or central`);
++  const pqJudge = {}, pqScript = {}, ledgerById = {};
++  for (const f of fams) {
++    pqJudge[f] = LED[f].issues.filter((x) => x.status === "physician_question" && /^J[1-6]$/.test(x.source.lens));
++    pqScript[f] = LED[f].issues.filter((x) => x.status === "physician_question" && !/^J[1-6]$/.test(x.source.lens));
++    for (const x of LED[f].issues) ledgerById[x.id] = x;
++  }
++  const TRIAGE = {}; const triageInfo = { dir: TRIAGE_REL, files: [], missing: [], invalid: [], stale: [] };
++  const recordIds = (f) => ({ research: new Set((RES[f].evidence || []).map((e) => e.id)), verify: new Set((VER[f].evidence || []).map((e) => e.id)), decision: new Set((DEC[f].evidence || []).map((e) => e.id)) });
++  const GOV_FILES = ["critical-limits.json", "action-limits.json", "state-rules.md", "wording-rules.md", "marker-classes.json"].map((g) => `docs/signoff/work/governance/${g}`);
++  for (const f of fams) {
++    const file = path.join(triageDir, `${f}.json`);
++    if (!fs.existsSync(file)) { if (pqJudge[f].length) triageInfo.missing.push(f); continue; }
++    let doc;
++    try { doc = rj(file); } catch (e) { errors.push(`${rel(file)}: not valid JSON (${e.message})`); triageInfo.invalid.push(f); continue; }
++    const errs = SV.validate(doc, triageSchema, { rootFile: triageSchemaFile }).map((e) => `${rel(file)}: ${e}`);
++    if (doc.family !== f) errs.push(`${rel(file)}: family is '${doc.family}', expected '${f}'`);
++    if (doc.batch !== F[f].batch) errs.push(`${rel(file)}: batch is '${doc.batch}', expected '${F[f].batch}'`);
++    const want = new Set(pqJudge[f].map((x) => x.id));
++    const seenIds = new Map();
++    for (const it of doc.items || []) seenIds.set(it.ledger_id, (seenIds.get(it.ledger_id) || 0) + 1);
++    for (const [id, n] of seenIds) { if (n > 1) errs.push(`${rel(file)}: ${id} appears ${n} times`); if (!want.has(id)) errs.push(`${rel(file)}: ${id} is not a judge-raised physician question of ${f}`); }
++    for (const id of want) if (!seenIds.has(id)) errs.push(`${rel(file)}: judge-raised physician question ${id} is missing`);
++    const cnt = { a: 0, b: 0, c: 0, d: 0, e: 0 };
++    for (const it of doc.items || []) if (cnt[it.class] !== undefined) cnt[it.class]++;
++    for (const c of Object.keys(cnt)) if ((doc.counts || {})[c] !== cnt[c]) errs.push(`${rel(file)}: counts.${c} is ${(doc.counts || {})[c]}, the items hold ${cnt[c]}`);
++    if ((doc.counts || {}).total !== (doc.items || []).length) errs.push(`${rel(file)}: counts.total is ${(doc.counts || {}).total}, the file holds ${(doc.items || []).length} items`);
++    for (const it of doc.items || []) {
++      const x = ledgerById[it.ledger_id];
++      if (x && x.source.lens !== it.lens) warnings.push(`${rel(file)}: ${it.ledger_id}: lens ${it.lens} differs from the ledger's ${x.source.lens}; the ledger's is used`);
++      if (it.class === "c" && !String(it.fixer_text || "").trim()) errs.push(`${rel(file)}: ${it.ledger_id}: class c without fixer_text`);
++    }
++    // commit: any ancestor of the commit being built (coordinator note 5); note what changed since
++    let ancestor = false;
++    try { execFileSync("git", ["merge-base", "--is-ancestor", String(doc.commit), "HEAD"], { cwd: ROOT, stdio: "ignore" }); ancestor = true; } catch { ancestor = false; }
++    if (!ancestor) errs.push(`${rel(file)}: commit ${doc.commit} is not an ancestor of ${COMMIT.slice(0, 7)}`);
++    else {
++      let changed = [];
++      try { changed = git(["diff", "--name-only", String(doc.commit), "--", `docs/signoff/work/decisions/${f}.json`, `docs/signoff/work/ledger/${f}.json`, ...GOV_FILES]).split("\n").filter(Boolean).sort(); } catch { changed = ["(git diff failed)"]; }
++      if (changed.length) triageInfo.stale.push({ family: f, triage_commit: doc.commit, changed_since: changed });
++    }
++    if (errs.length) { errors.push(...errs); triageInfo.invalid.push(f); continue; }
++    TRIAGE[f] = doc;
++    triageInfo.files.push({ family: f, file: `${TRIAGE_REL}/${f}.json`, sha256: sha256File(file), commit: doc.commit, triaged_by: doc.triaged_by, counts: doc.counts, observations: (doc.observations || []).length });
++  }
++  if (opts.requireTriage && triageInfo.missing.length) errors.push(`--require-triage: no triage file for ${triageInfo.missing.join(", ")}`);
++
++  /** The refusal of ruling M-10, as the coordinator narrowed it: a text that changes a bound field or adds or removes a row. */
++  /** A fixer text with its quoted passages (the texts it replaces and inserts) taken out. */
++  const stripQuoted = (text) => String(text || "").replace(/(^|[\s(\[:,;])'[^']*?'(?=[\s.,;:)\]]|$)/g, "$1 ").replace(/"[^"]*"/g, " ").replace(/‘[^’]*’|“[^”]*”|«[^»]*»/g, " ");
++  function boundChange(text) {
++    let t = stripQuoted(text);
++    t = t.replace(/\bmessages?(\.(en|es))?\.\w+/gi, " ").replace(/\bcritical_none_reason\w*/gi, " ").replace(/\brcv\.\w+/gi, " ").replace(/\b(Msg|Mensaje)_\w+/g, " ");
++    const FIELD = "(reference_low|reference_high|optimal_low|optimal_high|critical_low|critical_high|normal_low|normal_high|band_rule|decimals|grade|unit|unit_es|unit_en)";
++    const VERB = "(set|sets|change|changes|raise|lower|move|moves|widen|narrow|loosen|tighten|replace|remove|delete|drop|clear|null|round)";
++    const pats = [
++      new RegExp(`\\b${VERB}\\b[^.;:]{0,60}?\\b${FIELD}\\b`, "i"),
++      new RegExp(`\\bfields?\\s+${FIELD}\\b`, "i"),
++      new RegExp(`\\b${FIELD}\\b\\s*(:|=|->|→|from\\b[^.;]{0,30}\\bto\\b)`, "i"),
++      new RegExp(`\\b${VERB}\\b[^.;:]{0,40}?\\b(floor|ceiling|lower limit|upper limit|reference (limit|bound|interval|range)|optimal (band|bound|floor|ceiling|limit|target)|critical limit|bounds?|cut-?off)\\b`, "i"),
++      /\b(regrade|re-grade|upgrade|downgrade)\b/i,
++      /\b(add|create|insert)\s+(a\s+|an\s+|one\s+|the\s+)?(new\s+)?rows?\b/i,
++      /\b(remove|delete|drop|split|merge|cut)\s+(the\s+|this\s+|that\s+|both\s+|two\s+)?(\w+\s+){0,2}rows?\b(?!\s*(key|keys|'s))/i,
++    ];
++    const NEG = /\b(no|not|never|nothing|without|unchanged|stays?|keep|keeps|kept|leave|leaves|do not|don't|does not|is not|are not|change no|neither|nor)\b/i;
++    for (const clause of t.split(/[.;]\s+|\n|\(\d+\)/)) {
++      if (/\b(supports?|links?|entries|entry|evidence records?|record's|the record)\b/i.test(clause)) continue; // which limit a link points to
++      if (/\bchanges?\s+records?\b|\bchanges\[\]|\bchange record\b/i.test(clause)) continue; // the reason text of a change record
++      for (const re of pats) {
++        const m = clause.match(re);
++        if (!m) continue;
++        const before = clause.slice(Math.max(0, m.index - 40), m.index + m[0].length);
++        if (NEG.test(before)) continue;
++        return m[0].trim();
++      }
++    }
++    return null;
++  }
++  function routeClassC(f, it) {
++    const t = stripQuoted(it.fixer_text);
++    const ids = [...new Set(t.match(/\b[fF]\d{2}-[A-Z]{1,3}\d{1,3}[a-z]?\b/g) || [])];
++    const R = recordIds(f);
++    const nonResearch = ids.filter((id) => !R.research.has(id) && (R.verify.has(id) || R.decision.has(id)));
++    if (/evidence_verdicts|the verifier adds|verifier (gives|writes|grades)/i.test(t)) {
++      if (nonResearch.length) return { route: "central", reason: `asks for a verdict on ${nonResearch.join(", ")}, which is not a research record. ${VERDICT_REASON}` };
++      return { route: "verifier", reason: "the change is the verifier's (a verdict or grade)" };
++    }
++    if (/decisions\/f\d{2}_|\bdecision file\b|\bdecisions file\b/i.test(t)) return { route: "fixer", reason: "the change is in the decision file" };
++    if (/\b(research|verify)\/f\d{2}_|\bresearch file\b|\bverify file\b|^\s*evidence pass\b/i.test(t)) return { route: "evidence_pass", reason: "the change is in the research or verify file, which only the evidence pass writes" };
++    return { route: "fixer", reason: "default: a text change in the decision file" };
++  }
++  const triageReview = [];
++  const triageItemOf = {}; // ledger id -> item
++  const routedVerifier = {}; // family -> [{ledger_id, rows, reason}]
++  for (const f of fams) {
++    const doc = TRIAGE[f];
++    const classOf = new Map((doc?.items || []).map((it) => [it.ledger_id, it]));
++    for (const x of pqJudge[f]) {
++      const t = classOf.get(x.id);
++      const ov = ROUTES[x.id];
++      if (!t && !ov) continue;
++      const cls = t ? t.class : null;
++      if (cls === "c" || (ov && ["fixer", "evidence_pass"].includes(ov.route))) {
++        const text = scrub((ov && ov.text) || (t && t.fixer_text) || "");
++        // the orchestrator's route stands as given; a triage text is refused when it changes a bound field or a row
++        const refusedBy = ov ? null : boundChange(text);
++        const route = ov ? { route: ov.route, reason: `orchestrator's route: ${ov.reason}` } : routeClassC(f, t);
++        if (refusedBy) { triageReview.push({ ledger_id: x.id, family: f, lens: x.source.lens, reason: `the text changes a bound field or a row ('${refusedBy}'); a bound moves only on an item the orchestrator writes, never through the triage`, fixer_text: text }); continue; }
++        if (route.route === "verifier") {
++          (routedVerifier[f] = routedVerifier[f] || []).push({ ledger_id: x.id, rows: (ov && ov.rows) || (x.row_key ? [x.row_key] : []), reason: route.reason, text });
++          continue;
++        }
++        const owner = route.route === "central" ? CE : FF;
++        triageItemOf[x.id] = add(f, "TRIAGE", { source: { file: `${TRIAGE_REL}/${f}.json`, key: x.id, triaged_by: doc ? doc.triaged_by : null }, ledger_id: x.id, lens: x.source.lens, triage_class: cls, row_key: x.row_key, what: text, owner, stage: route.route === "evidence_pass" ? "evidence pass (research and verify files)" : route.route === "fixer" ? "fixer (decision file)" : undefined, route: route.route, route_reason: route.reason, linked_item: t && t.linked_item != null ? scrub(t.linked_item) : null, check: x.check_id, closing_pass: owner === FF || undefined, ruling: "M-10" });
++      } else if (ov && ov.route === "verifier") {
++        (routedVerifier[f] = routedVerifier[f] || []).push({ ledger_id: x.id, rows: ov.rows || (x.row_key ? [x.row_key] : []), reason: `orchestrator's route: ${ov.reason}`, text: ov.text ? scrub(ov.text) : null });
++      }
++    }
++    for (const r of routedVerifier[f] || []) {
++      triageItemOf[r.ledger_id] = add(f, "ROUTE", { source: { file: r.reason.startsWith("orchestrator") ? rel(routesFile) : `${TRIAGE_REL}/${f}.json`, key: r.ledger_id }, ledger_id: r.ledger_id, lens: ledgerById[r.ledger_id].source.lens, rows: r.rows, depth: ledgerById[r.ledger_id].check_id === "E3" ? "challenged_grade" : "routed", what: `${r.text ? `${r.text} ` : ""}On the verifier's list (${r.reason}): ${r.rows.length ? `fresh verdict and grade on ${r.rows.join(" and ")}, the verifier opening every source of the challenged bound (M-01 'challenged grade')` : "the verifier's own task as written"}.`, owner: VF, route: "verifier", route_reason: r.reason, check: ledgerById[r.ledger_id].check_id, closing_pass: true, ruling: "M-10; M-01" });
++    }
++  }
++  for (const id of Object.keys(ROUTES)) if (!ledgerById[id] || ledgerById[id].status !== "physician_question" || !/^J[1-6]$/.test(ledgerById[id].source.lens)) warnings.push(`${rel(routesFile)}: ${id} is not a judge-raised physician question; its route is ignored`);
+ 
+-// ─── output ───
+-const OWNERS = [FF, VF, CE, W3, PH, EX];
+-const count = (list) => { const o = Object.fromEntries(OWNERS.map((w) => [w, 0])); for (const it of list) o[it.owner]++; return o; };
+-const byFamily = {};
+-const total = Object.fromEntries(OWNERS.map((w) => [w, 0]));
+-for (const f of fams) {
+-  const c = count(items[f]);
+-  for (const w of OWNERS) total[w] += c[w];
+-  const fixer = items[f].filter((x) => x.owner === FF);
+-  const d30 = items[f].filter((x) => x.kind === "D30");
+-  byFamily[f] = {
+-    title: F[f].title, batch: F[f].batch, rounds_run: lastRound(f), mopup_round: lastRound(f) + 1,
+-    counts: { total: items[f].length, ...c, minor_judge_items_listed_separately: minor[f].length },
+-    in_round: fixer.length + d30.length > 0,
+-    stages: {
+-      evidence_pass: fixer.some((x) => /evidence pass/.test(x.stage || "")),
+-      author_new_rows: items[f].some((x) => x.owner === FF && /author stage/.test(x.needs || "")),
+-      fixer: fixer.length > 0,
++  // ─── per-family stages, closing lists, fixer parts ───
++  const OWNERS = [FF, VF, CE, W3, PH, EX];
++  const isOpen = (it) => it.status !== "closed";
++  const stageOf = (it) => (it.owner !== FF ? null : /author stage/.test(it.needs || "") ? "author" : /evidence pass/.test(it.stage || "") ? "evidence_pass" : "fixer");
++  const PART_MAX = 12;
++  function fixerParts(list) {
++    const groups = [];
++    const byRow = new Map();
++    for (const it of list) {
++      const g = it.row_key ? `row:${it.row_key}` : `item:${it.id}`;
++      if (!byRow.has(g)) { byRow.set(g, []); groups.push(byRow.get(g)); }
++      byRow.get(g).push(it);
++    }
++    const parts = []; let cur = [];
++    for (const g of groups) {
++      if (cur.length && cur.length + g.length > PART_MAX) { parts.push(cur); cur = []; }
++      if (g.length > PART_MAX) { for (let i = 0; i < g.length; i += PART_MAX) parts.push(g.slice(i, i + PART_MAX)); continue; }
++      cur.push(...g);
++    }
++    if (cur.length) parts.push(cur);
++    return parts.map((p) => p.map((it) => it.id));
++  }
++  const count = (list) => { const o = Object.fromEntries(OWNERS.map((w) => [w, 0])); for (const it of list) o[it.owner]++; return o; };
++  const HASHED = (f) => [`docs/signoff/work/decisions/${f}.json`, `docs/signoff/work/verify/${f}.json`, `docs/signoff/work/research/${f}.json`, `docs/signoff/work/ledger/${f}.json`, `docs/signoff/work/briefs/${f}.json`, `docs/signoff/work/inputs/${f}.json`, "docs/signoff/work/families.json", ...GOV_FILES];
++  let dirty = [];
++  try { dirty = git(["status", "--porcelain", "-uall"]).split("\n").filter(Boolean).map((l) => l.slice(3)); } catch { dirty = []; }
++  const byFamily = {};
++  const total = Object.fromEntries(OWNERS.map((w) => [w, 0]));
++  const closedAll = [];
++  const closingAll = {};
++  for (const f of fams) {
++    const open = items[f].filter(isOpen);
++    const closed = items[f].filter((it) => !isOpen(it));
++    closedAll.push(...closed.map((it) => ({ id: it.id, family: f, kind: it.kind, evidence: it.closed_evidence })));
++    const c = count(open);
++    for (const w of OWNERS) total[w] += c[w];
++    const fixerOwned = open.filter((x) => x.owner === FF);
++    const fixerList = fixerOwned.filter((x) => stageOf(x) === "fixer" || (stageOf(x) === "author"));
++    const verifierRows = [];
++    for (const it of open.filter((x) => x.owner === VF)) {
++      if (it.kind === "D30") verifierRows.push({ row_key: it.row_key, depth: it.depth, item_id: it.id, fields: it.fields_changed_after_verdict, own_record_needed: it.own_record_needed });
++      else if (it.kind === "JUDGE" && it.challenged_grade && it.row_key) verifierRows.push({ row_key: it.row_key, depth: "challenged_grade", item_id: it.id, ledger_id: it.ledger_id });
++      else if (it.kind === "ROUTE") for (const rk of it.rows || []) verifierRows.push({ row_key: rk, depth: it.depth, item_id: it.id, ledger_id: it.ledger_id });
++    }
++    const rowsMerged = [];
++    for (const r of verifierRows) {
++      const prev = rowsMerged.find((x) => x.row_key === r.row_key);
++      if (!prev) { rowsMerged.push({ ...r, item_ids: [r.item_id] }); continue; }
++      prev.item_ids.push(r.item_id);
++      if (r.depth === "challenged_grade") prev.challenged_grade = true;
++    }
++    for (const r of rowsMerged) delete r.item_id;
++    const verifierRecords = open.filter((x) => x.owner === VF && x.kind === "REGRADE").flatMap((it) => it.evidence_ids.map((id) => ({ evidence_id: id, why: "catalogue record graded D only because the quote check could not open it (M-13)", item_id: it.id })));
++    const newRows = [...new Set(open.filter((x) => stageOf(x) === "author").flatMap((x) => x.new_row_keys || []))].sort();
++    // closing lists: the plan's items (M-11 (3)), M-10's classes a, c and e, and the routed items; physician questions only
++    const closing = {};
++    const put = (lens, id, why) => { if (!/^J[1-6]$/.test(lens)) return; (closing[lens] = closing[lens] || new Map()); if (!closing[lens].has(id)) closing[lens].set(id, why); };
++    for (const it of open.filter((x) => x.kind === "JUDGE" && x.closing_pass && x.ledger_status === "physician_question")) put(it.lens, it.ledger_id, `the plan's closing item ${it.id}${it.ruling ? ` (${it.ruling})` : ""}`);
++    const tdoc = TRIAGE[f];
++    for (const t of tdoc?.items || []) {
++      const x = ledgerById[t.ledger_id]; if (!x) continue;
++      if (t.class === "a" || t.class === "e") put(x.source.lens, x.id, `triage class ${t.class}`);
++    }
++    for (const it of open.filter((x) => (x.kind === "TRIAGE" || x.kind === "ROUTE") && x.closing_pass)) put(it.lens, it.ledger_id, `${it.kind === "TRIAGE" ? "triage class c" : "routed"}, after ${it.route === "verifier" ? "the verifier" : it.route === "evidence_pass" ? "the evidence pass" : "the fixer"} (${it.id})`);
++    const closingObj = Object.fromEntries(Object.keys(closing).sort().map((l) => [l, [...closing[l].keys()].sort()]));
++    const closingWhy = Object.fromEntries(Object.keys(closing).sort().map((l) => [l, Object.fromEntries([...closing[l].entries()].sort())]));
++    closingAll[f] = closingObj;
++    const d30 = open.filter((x) => x.kind === "D30");
++    const stages = {
++      evidence_pass: fixerOwned.some((x) => stageOf(x) === "evidence_pass"),
++      evidence_pass_items: fixerOwned.filter((x) => stageOf(x) === "evidence_pass").map((x) => x.id),
++      author_new_rows: open.some((x) => stageOf(x) === "author"),
++      author_rows: newRows,
++      author_items: open.filter((x) => stageOf(x) === "author").map((x) => ({ id: x.id, row_key: x.row_key || null, new_row_keys: x.new_row_keys || null, what: x.what })),
++      fixer: fixerList.length > 0,
++      fixer_items: fixerList.map((x) => ({ id: x.id, row_key: x.row_key || null })),
++      fixer_parts: fixerParts(fixerList),
++      verifier: rowsMerged.length > 0 || verifierRecords.length > 0,
++      verifier_rows: rowsMerged,
++      verifier_records: verifierRecords,
+       verifier_reverdict_rows_today: d30.map((x) => x.row_key),
+-      closing_lenses: [...new Set(items[f].filter((x) => x.kind === "JUDGE" && x.closing_pass).map((x) => x.lens))].sort(),
+-    },
+-    items: items[f],
+-    minor_judge_items: minor[f],
++      closing: closingObj,
++      closing_why: closingWhy,
++      closing_lenses: Object.keys(closingObj),
++      new_row_reading: newRows.length ? { lenses: ["J1", "J2"], row_keys: newRows } : null,
++    };
++    const hashes = {};
++    for (const p of HASHED(f)) hashes[p] = sha256File(path.join(ROOT, p));
++    byFamily[f] = {
++      title: F[f].title, batch: F[f].batch, rounds_run: lastRound(f), mopup_round: lastRound(f) + 1,
++      counts: { total: open.length, ...c, closed_by_the_files: closed.length, minor_judge_items_listed_separately: minor[f].length },
++      in_round: fixerOwned.length + open.filter((x) => x.owner === VF).length + stages.closing_lenses.length > 0,
++      stages,
++      hashes,
++      files_differ_from_commit: HASHED(f).filter((p) => dirty.includes(p)),
++      items: open,
++      closed_items: closed,
++      minor_judge_items: minor[f],
++    };
++  }
++  const cc = count(central.filter(isOpen)); for (const w of OWNERS) total[w] += cc[w];
++
++  // ─── the reconciliation table: every physician question of the ledgers once (M-10 (1)) ───
++  const itemIds = new Set([...central.map((x) => x.id), ...fams.flatMap((f) => items[f].map((x) => x.id))]);
++  const recon = [];
++  for (const f of fams) {
++    const tclass = new Map((TRIAGE[f]?.items || []).map((it) => [it.ledger_id, it]));
++    const statuses = Object.fromEntries(fresh.results.map((r) => [r.id, r.status]));
++    for (const x of pqScript[f]) {
++      const check = x.check_id;
++      const st = statuses[check] || "absent";
++      const r = fresh.results.find((y) => y.id === check);
++      const fl = (r?.failures || []).find((y) => L.issueId(f, check, y.key, null) === x.id);
++      const linked = fl ? failureItem[`${check}|${fl.key}`] || null : st === "blocked" ? blockedItem[check] || null : null;
++      const cls = fl || st === "blocked" ? "b" : "a";
++      recon.push({ ledger_id: x.id, family: f, lens: x.source.lens, severity: x.severity, check_id: check, row_key: x.row_key, class: cls, class_by: "builder (script-raised: classed from the check that raised it)", evidence: fl ? `${CHECKS_REL}: ${check} still reports ${scrub(fl.key)}` : st === "blocked" ? `${CHECKS_REL}: ${check} is blocked (${scrub(String(r?.summary || "")).slice(0, 120)})` : `${CHECKS_REL}: ${check} ${st}; the failure is not reported on the compile of all 30 families`, linked_item: linked, linked_item_in_this_list: linked ? itemIds.has(linked) : null, route: cls === "a" ? "check sync: closes at the family's check stage (ledger.js checks) when its own run no longer reports it" : "stays until the check passes: the owned item is linked", item_id: linked, closing_lens: null });
++    }
++    for (const x of pqJudge[f]) {
++      const t = tclass.get(x.id);
++      const jit = judgeItem[x.id];
++      const tit = triageItemOf[x.id];
++      const lens = x.source.lens;
++      const onClosing = (closingAll[f][lens] || []).includes(x.id);
++      const review = triageReview.find((y) => y.ledger_id === x.id);
++      const ov = ROUTES[x.id] || null;
++      let route;
++      if (review) route = "review: refused by the builder (names a bound or row change)";
++      else if (tit) route = tit.owner === CE ? `central (${tit.route_reason})` : `${tit.route}${onClosing ? `, then the closing lens ${lens}` : ""}`;
++      else if (onClosing) route = `closing lens ${lens}`;
++      else if (t && t.class === "d") route = "physician (consolidated question, part A)";
++      else if (t && t.class === "b") route = "linked to an owned item; stays a physician question until the raising lens or the cold panel closes it";
++      else if (jit) route = `the plan's owner: ${jit.owner}`;
++      else route = "untriaged";
++      recon.push({ ledger_id: x.id, family: f, lens, severity: x.severity, check_id: x.check_id, row_key: x.row_key, class: t ? t.class : null, class_by: t ? `triage (${TRIAGE[f].triaged_by})` : "untriaged (no triage file)", evidence: t ? scrub(t.evidence) : null, linked_item: t ? (t.linked_item == null ? null : scrub(t.linked_item)) : jit ? jit.id : null, linked_item_in_this_list: t && t.linked_item ? itemIds.has(t.linked_item) : null, route, route_override: ov, item_id: tit ? tit.id : jit ? jit.id : null, closing_lens: onClosing ? lens : null, refused: review ? review.reason : null, physician_theme: t?.physician_theme == null ? null : scrub(t.physician_theme), physician_question: t?.physician_question == null ? null : scrub(t.physician_question) });
++    }
++  }
++  const pqTotal = fams.reduce((n, f) => n + pqJudge[f].length + pqScript[f].length, 0);
++  if (recon.length !== pqTotal || new Set(recon.map((r) => r.ledger_id)).size !== recon.length) errors.push(`reconciliation: ${recon.length} rows for ${pqTotal} physician questions (each must appear once)`);
++  const tally = (k) => { const o = {}; for (const r of recon) { const v = r[k] ?? "none"; o[v] = (o[v] || 0) + 1; } return Object.fromEntries(Object.entries(o).sort()); };
++  const themes = {}; for (const r of recon) if (r.class === "d" && r.physician_theme) themes[r.physician_theme] = (themes[r.physician_theme] || 0) + 1;
++  const reconCounts = { total: recon.length, judge_raised: recon.filter((r) => /^J/.test(r.lens)).length, script_raised: recon.filter((r) => !/^J/.test(r.lens)).length, by_class: tally("class"), on_closing_lists: recon.filter((r) => r.closing_lens).length, refused_to_review: triageReview.length, physician_themes: Object.fromEntries(Object.entries(themes).sort()) };
++
++  // ─── outputs ───
++  const BUILT_FROM = { commit: COMMIT, commit_date: COMMIT_DATE, builder: "docs/signoff/work/mopup/build-items.cjs", compile: "docs/signoff/tools/compile.js over the 30 families' decision files (run by the builder; compile-report exit " + compileExit + ")", checks: { file: CHECKS_REL, sha256: sha256File(checksFile), run_at_commit: fresh.git_commit || null, counts: fresh.counts, same_compile: !seedMismatch.length }, triage: { dir: TRIAGE_REL, files: triageInfo.files.length, missing: triageInfo.missing, invalid: triageInfo.invalid }, routes: fs.existsSync(routesFile) ? { file: rel(routesFile), sha256: sha256File(routesFile), entries: Object.keys(ROUTES).length } : null, unexplained_changes_today: unexplained.length };
++  const STATUS = {
++    e6_baseline_change: { approved: E6_APPROVED, baseline_floor_null_for_the_four_rows: e6BaselineNull, evidence_ts_approved_at_current_sha256: approvedAt(E6_FILE), ruling: "M-04" },
++    uacr: { ...uacr, ruling: "M-06" },
++    critical_limits_entries: Object.fromEntries(Object.keys(M07).map((m) => [m, !!tab[m]])),
++    action_limits_edits: { psa_at_or_below: PSA_EDITED, neutrophil_tier_below_1000: NEUTRO_EDITED, potassium_table_threshold: K_TABLE, ruling: "M-08" },
++    stale_phrase_in_compile: staleInCompile,
++  };
++  const out = {
++    _doc: "Items of the workstream 1 mop-up round (EVA physician sign-off programme), after the 14 rulings of DR-2026-11-11-01 (docs/signoff/work/governance/mopup-rulings.md). AI work product; a licensed physician reviews and signs. Built by docs/signoff/work/mopup/build-items.cjs from the repository files, the committed check result and the triage files; every count comes from the files as they were at built_from.commit.",
++    built_from: BUILT_FROM,
++    status_of_what_the_rulings_wait_on: STATUS,
++    owners: { family_fixer: "the family's fixer in the mop-up session (decision file; the evidence pass for the research and verify files; the author stage for a new row key)", verifier: "the independent verifier in the mop-up session (claude-fable-5-2: a fresh verdict, D-30 and M-01)", central: "the orchestrator, workstream 1-K or pack assembly", ws3_package: "a workstream 3 package (see package)", physician: "only the physician can answer", external: "data awaited from Echevarne" },
++    item_fields: "id, family, kind, status (open or closed by the files), source {file, key or row}, what (what has to change), owner, also, depends_on, needs, package, check (the check it moves), ruling, rule, stage, depth (verifier items), ledger_id (judge and triage items), closing_pass",
++    totals: { items: Object.values(total).reduce((a, b) => a + b, 0), by_owner: total, closed_by_the_files: closedAll.length, central_items_no_family: central.filter(isOpen).length, minor_judge_items_listed_separately: Object.values(minor).reduce((n, l) => n + l.length, 0), families_in_round: fams.filter((f) => byFamily[f].in_round).length, physician_questions_reconciled: recon.length },
++    reconciliation_counts: reconCounts,
++    triage: { ...triageInfo, review: triageReview },
++    handoffs_checked_closed: closedHandoffs,
++    families: byFamily,
++    central_items: central,
+   };
++  const files = {};
++  files["items.json"] = JSON.stringify(out, null, 1) + "\n";
++  for (const f of fams) {
++    const b = byFamily[f];
++    files[`items/${f}.json`] = JSON.stringify({
++      _doc: `Items file of ${f} for the workstream 1 mop-up round (docs/signoff/work/mopup/items/${f}.json). Read by docs/signoff/workflows/ws1-mopup.js: stage 0 stops the family when a file in 'hashes' differs, or when 'commit' is neither the session's start commit nor an ancestor of it (M-14). Agents do not write this file. AI work product; a licensed physician reviews and signs.`,
++      family: f, title: b.title, batch: b.batch, rounds_run: b.rounds_run, mopup_round: b.mopup_round,
++      commit: COMMIT,
++      built_from: { builder: BUILT_FROM.builder, checks: BUILT_FROM.checks.file, checks_sha256: BUILT_FROM.checks.sha256, triage: TRIAGE[f] ? `${TRIAGE_REL}/${f}.json` : null, triage_commit: TRIAGE[f]?.commit ?? null, routes: BUILT_FROM.routes ? BUILT_FROM.routes.file : null },
++      hashes: b.hashes,
++      files_differ_from_commit: b.files_differ_from_commit,
++      in_round: b.in_round, counts: b.counts, stages: b.stages,
++      items: b.items, closed_items: b.closed_items,
++      physician_questions: recon.filter((r) => r.family === f),
++    }, null, 1) + "\n";
++  }
++  files["reconciliation.json"] = JSON.stringify({ _doc: "Every ledger item in the state physician_question, once (ruling M-10 (1)): its class (a already gone, b the same subject as an owned item, c a defect the fixer corrects, d a choice for the physician, e not an issue under the definitions), the evidence, the linked item and its route. Script-raised items are classed by the builder from the check that raised them and close only when that check passes; judge-raised items are classed by the triage and close only by their raising lens or the cold panel. AI work product; a licensed physician reviews and signs.", built_from: { commit: COMMIT, checks: CHECKS_REL, triage_dir: TRIAGE_REL }, counts: reconCounts, review: triageReview, stale_triage: triageInfo.stale, rows: recon }, null, 1) + "\n";
++  if (opts.previous) {
++    const prev = rj(path.resolve(opts.previous));
++    const ckey = (it) => [it.family || "-", it.kind, it.topic || "", it.ledger_id || (it.kind === "JUDGE" ? it.source?.key : "") || it.failure_key || (it.kind === "D30" ? it.row_key : "") || (it.kind === "C21" ? it.source?.key : "") || it.row_key || it.source?.key || "", it.side || ""].join("|");
++    const index = (list) => { const m = new Map(); for (const it of list) { let k = ckey(it); while (m.has(k)) k += "#"; m.set(k, it); } return m; };
++    const oldList = [...Object.values(prev.families || {}).flatMap((b) => b.items || []), ...(prev.central_items || [])];
++    const newList = [...fams.flatMap((f) => items[f]), ...central];
++    const A = index(oldList), B = index(newList);
++    const diff = { _doc: "Items of this build against an earlier items.json, matched by content (family, kind, topic, ledger id or failure key or row, side), not by id (M-14 (4)). The orchestrator explains each line in the launch commit.", previous: { commit: prev.built_from?.commit || null, items: oldList.length }, current: { commit: COMMIT, items: newList.length }, disappeared: [], appeared: [], owner_changed: [], closed_by_the_files: [], id_changed: [] };
++    for (const [k, it] of A) if (!B.has(k)) diff.disappeared.push({ key: k, id: it.id, owner: it.owner, what: scrub(String(it.what)).slice(0, 200) });
++    for (const [k, it] of B) {
++      const o = A.get(k);
++      if (!o) { diff.appeared.push({ key: k, id: it.id, owner: it.owner, status: it.status, ruling: it.ruling || it.rule || null }); continue; }
++      if (o.id !== it.id) diff.id_changed.push({ key: k, was: o.id, now: it.id });
++      if (o.owner !== it.owner) diff.owner_changed.push({ key: k, id: it.id, was: o.owner, now: it.owner, ruling: it.ruling || it.rule || null });
++      if (it.status === "closed") diff.closed_by_the_files.push({ key: k, id: it.id, evidence: it.closed_evidence });
++    }
++    files["items-diff.json"] = JSON.stringify(diff, null, 1) + "\n";
++  }
++  // no path outside the repository in any output (M-14 (1))
++  const forbidden = [ROOT, os.tmpdir(), compileDir, opts.outAbs].filter(Boolean);
++  for (const [name, text] of Object.entries(files)) {
++    for (const p of forbidden) if (text.includes(p)) errors.push(`${name}: names a path outside the repository (${p === ROOT ? "the repository's absolute path" : "a temporary or output folder"})`);
++    const m = text.match(OUTSIDE_RE);
++    if (m) errors.push(`${name}: names a path outside the repository: ${m[0]}`);
++  }
++  const summary = { fams, byFamily, central, total, recon: reconCounts, triageInfo, triageReview, closedAll, STATUS, out };
++  return { files, summary, warnings, errors };
++}
++
++function printSummary(s) {
++  const { fams, byFamily, out } = s;
++  console.log("family | total | fixer | verifier | central | ws3 | physician | external | closed | D30 bounds/ref/text/dropped | stages (E evidence, A author, F fixer parts, V verifier) | closing lenses");
++  for (const f of fams) {
++    const b = byFamily[f], c = b.counts;
++    const d = b.items.filter((x) => x.kind === "D30");
++    const n = (k) => d.filter((x) => x.depth === k).length;
++    const st = b.stages;
++    console.log([f.slice(0, 3), c.total, c.family_fixer, c.verifier, c.central, c.ws3_package, c.physician, c.external, c.closed_by_the_files, `${n("bounds_or_grade")}/${n("reference")}/${n("texts_only")}/${n("dropped_row")}`, `${st.evidence_pass ? "E" : "-"}${st.author_new_rows ? "A" : "-"}${st.fixer ? `F${st.fixer_parts.length}` : "-"}${st.verifier ? "V" : "-"}`, Object.entries(st.closing).map(([l, ids]) => `${l}:${ids.length}`).join(" ") || "-"].join(" | "));
++  }
++  console.log("totals", JSON.stringify(out.totals));
++  console.log("reconciliation", JSON.stringify(out.reconciliation_counts));
++  console.log("triage", JSON.stringify({ files: out.triage.files.length, missing: out.triage.missing.length, invalid: out.triage.invalid, stale: out.triage.stale.map((x) => x.family), review: out.triage.review.length }));
++  console.log("waiting on", JSON.stringify(out.status_of_what_the_rulings_wait_on));
++}
++
++function main(argv) {
++  const flags = parseArgs(argv);
++  const root = path.resolve(flags.root || path.join(__dirname, "..", "..", "..", ".."));
++  const outDir = path.resolve(flags.out || path.join(root, "docs/signoff/work/mopup"));
++  const opts = { root, outAbs: outDir, checks: flags.checks, triageDir: flags["triage-dir"], routes: flags.routes, previous: flags.previous, compileDir: flags["compile-dir"], requireTriage: !!flags["require-triage"], allowStaleChecks: !!flags["allow-stale-checks"] };
++  const { files, summary, warnings, errors } = build(opts);
++  for (const w of warnings) console.error(`warning: ${w}`);
++  if (errors.length) { for (const e of errors) console.error(`error: ${e}`); console.error(`${errors.length} errors; nothing written`); return 1; }
++  if (flags.check) {
++    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "build-items-check-"));
++    for (const [name, text] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(tmp, name)), { recursive: true }); fs.writeFileSync(path.join(tmp, name), text); }
++    const diffs = [];
++    for (const name of Object.keys(files).sort()) {
++      const a = path.join(outDir, name);
++      if (!fs.existsSync(a)) { diffs.push(`${name}: missing in the output folder`); continue; }
++      if (!fs.readFileSync(a).equals(fs.readFileSync(path.join(tmp, name)))) diffs.push(`${name}: differs from a rebuild`);
++    }
++    const itemsDir = path.join(outDir, "items");
++    if (fs.existsSync(itemsDir)) for (const n of fs.readdirSync(itemsDir).sort()) if (!files[`items/${n}`]) diffs.push(`items/${n}: in the output folder but not rebuilt`);
++    fs.rmSync(tmp, { recursive: true, force: true });
++    if (diffs.length) { for (const d of diffs) console.log(d); console.log(`--check: ${diffs.length} differences`); return 1; }
++    console.log(`--check: ${Object.keys(files).length} files identical to a rebuild`);
++    return 0;
++  }
++  for (const [name, text] of Object.entries(files)) { const p = path.join(outDir, name); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); }
++  printSummary(summary);
++  console.log(`wrote ${Object.keys(files).length} files`);
++  return 0;
++}
++
++module.exports = { build, main, parseArgs };
++if (require.main === module) {
++  try { process.exitCode = main(process.argv.slice(2)); } catch (e) { console.error(`error: ${e.message}`); process.exitCode = 2; }
+ }
+-const cc = count(central); for (const w of OWNERS) total[w] += cc[w];
+-const out = {
+-  _doc: "Items for the mop-up round of workstream 1 (EVA physician sign-off programme). AI work product; a licensed physician reviews and signs. Built by build-items.cjs from the repository as it stood and from a compile of all 30 families run outside the repository; rebuild after the D-43 rebuild of inputs and briefs.",
+-  built_from: { branch: "claude/wonderful-meitner-l4g7p5", commit: require("child_process").execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(), compile: "node docs/signoff/tools/compile.js --out-dir <scratch>/compile-all (30 families from decisions)", checks: `npm run dsrt -- --seed-dir <scratch>/compile-all: pass ${fresh.counts.pass}, fail ${fresh.counts.fail}, blocked ${fresh.counts.blocked}`, unexplained_changes_today: unexplained.length },
+-  owners: { family_fixer: "the family's fixer in the mop-up session (decision file; evidence pass for quotes in the research and verify files; author stage for a new row key)", verifier: "the independent verifier in the mop-up session (fresh verdict, D-30)", central: "the orchestrator, workstream 1-K or pack assembly", ws3_package: "a workstream 3 package (see package)", physician: "only the physician can answer", external: "data awaited from Echevarne" },
+-  item_fields: "id, family, kind, source {file, key or row}, what (what has to change), owner, also (others involved), depends_on, needs, package, check (the check it moves)",
+-  totals: { items: Object.values(total).reduce((a, b) => a + b, 0), by_owner: total, central_items_no_family: central.length, minor_judge_items_listed_separately: Object.values(minor).reduce((n, l) => n + l.length, 0), families_in_round: fams.filter((f) => byFamily[f].in_round).length },
+-  handoffs_checked_closed: closedHandoffs,
+-  families: byFamily,
+-  central_items: central,
+-};
+-fs.writeFileSync(path.join(S, "items.json"), JSON.stringify(out, null, 1) + "\n");
+-// console summary
+-console.log("family | total | fixer | verifier | central | ws3 | physician | external | minor | D30 strict/bound/text | stages");
+-for (const f of fams) { const b = byFamily[f], c = b.counts; const d = items[f].filter((x) => x.kind === "D30"); const n = (k) => d.filter((x) => x.d30_class === k).length;
+-  console.log([short(f), c.total, c.family_fixer, c.verifier, c.central, c.ws3_package, c.physician, c.external, c.minor_judge_items_listed_separately, `${n("optimal_bounds_or_grade")}/${n("other_bound_class_or_band_rule")}/${n("text_only")}`, `${b.stages.evidence_pass ? "E" : "-"}${b.stages.author_new_rows ? "A" : "-"}${b.stages.fixer ? "F" : "-"}${d.length ? "V" : "-"} ${b.stages.closing_lenses.join("")}`].join(" | ")); }
+-console.log("central (no family)", JSON.stringify(cc));
+-console.log("totals", JSON.stringify(out.totals));
+-const kinds = {}; for (const it of central) { const k = 'CENTRAL:' + it.kind + '/' + it.owner; kinds[k] = (kinds[k] || 0) + 1; } for (const f of fams) for (const it of items[f]) { const k = it.kind + (it.topic ? ':' + it.topic : '') + "/" + it.owner; kinds[k] = (kinds[k] || 0) + 1; } console.log(JSON.stringify(kinds));
+-console.log(JSON.stringify(closedHandoffs.map((h) => h.handoff + ": " + h.status)));
