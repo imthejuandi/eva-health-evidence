@@ -21,3 +21,6 @@ Nothing here is a clinical sign-off.
 ## Snapshots
 
 - `snapshot-2026-11-11/`: transcripts up to 11 November 2026 21:01 UTC, the scratch folder read 21:38 to 21:47 UTC, and the eva-health repository at commit e5b42ff. Start with its `README.md` and `TESTS-SUMMARY.md`; `DELETIONS.md` says what was deleted earlier in the session and what survives; `transcripts/` and `scratch/` hold the archive parts with their checksums (`sha256sum -c SHA256SUMS`). A later snapshot will cover the rest of the programme.
+- `snapshot-2026-11-12-mopup-impl/`: made at 22:44 UTC on 11 November 2026, before the scratch copies of the mop-up builder test and mocked dry run were removed: every output of that work, and for each removed copy its base commit, status, binary diff and untracked files. Its `SHA256SUMS` lists every file.
+
+Dates. From about 21:00 UTC on 11 November 2026 the orchestrator's working notes ran ahead of the clock, so the second snapshot's folder name, its README title and its commit message (7f74572) say 12 November although it was made on 11 November; the commit times are right. The names are kept so that references hold. The records in eva-health were corrected the same day; `docs/signoff/evidence/README.md` there lists what was corrected and what was kept.
