@@ -27,3 +27,4 @@ Nothing here is a clinical sign-off.
 - `removals-2026-11-12b/`: the second removals of 12 November 2026: a bundle of every local branch not on the remote, and the record of the frozen-file reviewer's four tree copies, removed after this upload.
 
 Dates. From about 21:00 UTC on 11 November 2026 the orchestrator's working notes ran ahead of the clock, so the second snapshot's folder name, its README title and its commit message (7f74572) say 12 November although it was made on 11 November; the commit times are right. The names are kept so that references hold. The records in eva-health were corrected the same day; `docs/signoff/evidence/README.md` there lists what was corrected and what was kept.
+- `branches/`: a bundle of every unpushed local branch, refreshed while work is in flight, so the package branches survive the loss of the work machine.
