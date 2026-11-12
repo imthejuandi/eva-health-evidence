@@ -1,0 +1,257 @@
+diff --git a/docs/signoff/work/decisions/f13_white_cells_other.json b/docs/signoff/work/decisions/f13_white_cells_other.json
+index 690a286..64a9d4a 100644
+--- a/docs/signoff/work/decisions/f13_white_cells_other.json
++++ b/docs/signoff/work/decisions/f13_white_cells_other.json
+@@ -1,9 +1,9 @@
+ {
+   "schema_version": "1",
+   "family": "f13_white_cells_other",
+-  "round": 2,
+-  "decided_at": "2026-11-10",
+-  "verify_sha256": "cf68c1c23d5e74d15e9e736a6be1a293e29d1f32a60807f0dfe677d9eab33e84",
++  "round": 3,
++  "decided_at": "2026-11-12",
++  "verify_sha256": "ebe198d2816d89e81c354e94232c1cefc75ea7c76c4cc3db2960ba9c60fa93ee",
+   "fixer_role": "physician fixer, round 2, batch B05 (AI work product for review by a licensed physician)",
+   "final_rows": [
+     {
+@@ -430,8 +430,8 @@
+           ]
+         }
+       ],
+-      "method_note": "Electronic cell count and differential on EDTA whole blood ('Contaje y Fórmula Electrónico'); Echevarne's analyser model is not in the catalogue (methods letter L4). Echevarne prints 'below 575' /µL, which equals 5% of its upper leukocyte limit (5% of 11,500 = 575; catalogue lines 196, 197 and 202; computed in this task) and lies above every measured healthy upper limit opened here: 390/µL in Barcelona (f13-E23), 300 to 400/µL in healthy Swedish adults (f13-E48) and about 400/µL across three large population studies (f13-E47).",
+-      "method_note_es": "Recuento celular y fórmula electrónicos en sangre total con EDTA («Contaje y Fórmula Electrónico»); el modelo de analizador de Echevarne no figura en el catálogo (carta de métodos L4). Echevarne imprime «menos de 575» /µL, que equivale al 5 % de su límite superior de leucocitos (5 % de 11.500 = 575; líneas 196, 197 y 202 del catálogo; calculado en esta tarea) y queda por encima de todos los límites superiores medidos en personas sanas abiertos aquí: 390/µL en Barcelona (f13-E23), de 300 a 400/µL en adultos suecos sanos (f13-E48) y unos 400/µL en tres grandes estudios de población (f13-E47).",
++      "method_note": "Electronic cell count and differential on EDTA whole blood ('Contaje y Fórmula Electrónico'); Echevarne's analyser model is not in the catalogue (methods letter L4). Echevarne prints 'below 575' /µL, which equals 5% of its upper leukocyte limit (5% of 11,500 = 575; catalogue lines 196, 197 and 202; computed in this task) and lies above every measured healthy upper limit opened here: 390/µL in Barcelona (f13-E23), 300 to 400/µL in healthy Swedish adults (f13-E48) and about 400/µL across three large population studies (f13-E47). Mop-up dry run: text corrected by the fixer.",
++      "method_note_es": "Recuento celular y fórmula electrónicos en sangre total con EDTA («Contaje y Fórmula Electrónico»); el modelo de analizador de Echevarne no figura en el catálogo (carta de métodos L4). Echevarne imprime «menos de 575» /µL, que equivale al 5 % de su límite superior de leucocitos (5 % de 11.500 = 575; líneas 196, 197 y 202 del catálogo; calculado en esta tarea) y queda por encima de todos los límites superiores medidos en personas sanas abiertos aquí: 390/µL en Barcelona (f13-E23), de 300 a 400/µL en adultos suecos sanos (f13-E48) y unos 400/µL en tres grandes estudios de población (f13-E47). Ensayo de la ronda de repaso: texto corregido por el corrector.",
+       "rcv": {
+         "cvi_pct": 15,
+         "cva_pct": null,
+@@ -1510,6 +1510,24 @@
+       "issue_ids": [
+         "f13_white_cells_other--D5--basophils.both.All_Adults.bounds--none"
+       ]
++    },
++    {
++      "row_key": "eosinophils_absolute|both|All Adults|none",
++      "field": "method_note",
++      "from": "Electronic cell count and differential on EDTA whole blood ('Contaje y Fórmula Electrónico'); Echevarne's analyser model is not in the catalogue (methods letter L4). Echevarne prints 'below 575' /µL, which equals 5% of its upper leukocyte limit (5% of 11,500 = 575; catalogue lines 196, 197 and 202; computed in this task) and lies above every measured healthy upper limit opened here: 390/µL in Barcelona (f13-E23), 300 to 400/µL in healthy Swedish adults (f13-E48) and about 400/µL across three large population studies (f13-E47).",
++      "to": "Electronic cell count and differential on EDTA whole blood ('Contaje y Fórmula Electrónico'); Echevarne's analyser model is not in the catalogue (methods letter L4). Echevarne prints 'below 575' /µL, which equals 5% of its upper leukocyte limit (5% of 11,500 = 575; catalogue lines 196, 197 and 202; computed in this task) and lies above every measured healthy upper limit opened here: 390/µL in Barcelona (f13-E23), 300 to 400/µL in healthy Swedish adults (f13-E48) and about 400/µL across three large population studies (f13-E47). Mop-up dry run: text corrected by the fixer.",
++      "direction": "neutral",
++      "reason": "Mop-up dry run: item f13-TRIAGE-01.",
++      "evidence_ids": []
++    },
++    {
++      "row_key": "eosinophils_absolute|both|All Adults|none",
++      "field": "method_note_es",
++      "from": "Recuento celular y fórmula electrónicos en sangre total con EDTA («Contaje y Fórmula Electrónico»); el modelo de analizador de Echevarne no figura en el catálogo (carta de métodos L4). Echevarne imprime «menos de 575» /µL, que equivale al 5 % de su límite superior de leucocitos (5 % de 11.500 = 575; líneas 196, 197 y 202 del catálogo; calculado en esta tarea) y queda por encima de todos los límites superiores medidos en personas sanas abiertos aquí: 390/µL en Barcelona (f13-E23), de 300 a 400/µL en adultos suecos sanos (f13-E48) y unos 400/µL en tres grandes estudios de población (f13-E47).",
++      "to": "Recuento celular y fórmula electrónicos en sangre total con EDTA («Contaje y Fórmula Electrónico»); el modelo de analizador de Echevarne no figura en el catálogo (carta de métodos L4). Echevarne imprime «menos de 575» /µL, que equivale al 5 % de su límite superior de leucocitos (5 % de 11.500 = 575; líneas 196, 197 y 202 del catálogo; calculado en esta tarea) y queda por encima de todos los límites superiores medidos en personas sanas abiertos aquí: 390/µL en Barcelona (f13-E23), de 300 a 400/µL en adultos suecos sanos (f13-E48) y unos 400/µL en tres grandes estudios de población (f13-E47). Ensayo de la ronda de repaso: texto corregido por el corrector.",
++      "direction": "neutral",
++      "reason": "Mop-up dry run: item f13-TRIAGE-01.",
++      "evidence_ids": []
+     }
+   ],
+   "issues_addressed": [
+@@ -1531,7 +1549,8 @@
+     "f13_white_cells_other--D5--basophils_absolute.both.All_Adults.bounds--none",
+     "f13_white_cells_other--D5--monocytes.both.All_Adults.bounds--none",
+     "f13_white_cells_other--D5--eosinophils.both.All_Adults.bounds--none",
+-    "f13_white_cells_other--D5--basophils.both.All_Adults.bounds--none"
++    "f13_white_cells_other--D5--basophils.both.All_Adults.bounds--none",
++    "f13_white_cells_other--definition:reference_interval--eosinophils_absolute.both.All_Adults.none--high"
+   ],
+   "evidence": [],
+   "physician_questions": [
+diff --git a/docs/signoff/work/ledger/f13_white_cells_other.json b/docs/signoff/work/ledger/f13_white_cells_other.json
+index 6372346..1e02552 100644
+--- a/docs/signoff/work/ledger/f13_white_cells_other.json
++++ b/docs/signoff/work/ledger/f13_white_cells_other.json
+@@ -21,7 +21,8 @@
+       },
+       "evidence_paths": [
+         "docs/signoff/work/checks/f13_white_cells_other-r1.json",
+-        "docs/signoff/work/checks/f13_white_cells_other-r2.json"
++        "docs/signoff/work/checks/f13_white_cells_other-r2.json",
++        "docs/signoff/work/checks/f13_white_cells_other-r3.json"
+       ],
+       "refutation_paths": [],
+       "summary": "C1 eosinophils_absolute|female|Lactation|unreachable: row at file index 32 is never picked for any sex and age 18-120",
+@@ -48,7 +49,8 @@
+       },
+       "evidence_paths": [
+         "docs/signoff/work/checks/f13_white_cells_other-r1.json",
+-        "docs/signoff/work/checks/f13_white_cells_other-r2.json"
++        "docs/signoff/work/checks/f13_white_cells_other-r2.json",
++        "docs/signoff/work/checks/f13_white_cells_other-r3.json"
+       ],
+       "refutation_paths": [],
+       "summary": "C1 eosinophils_absolute|female|Pregnancy|unreachable: row at file index 31 is never picked for any sex and age 18-120",
+@@ -68,10 +70,10 @@
+       "row_key": null,
+       "side": null,
+       "severity": "blocking",
+-      "status": "physician_question",
++      "status": "closed",
+       "rounds": {
+         "opened": 1,
+-        "closed": null
++        "closed": 3
+       },
+       "evidence_paths": [
+         "docs/signoff/work/checks/f13_white_cells_other-r1.json",
+@@ -79,9 +81,9 @@
+       ],
+       "refutation_paths": [],
+       "summary": "D2 eosinophils_absolute|female|Lactation|age_group: EN \"Lactation\" vs ES \"Lactancia\" (expected \"Lactation\")",
+-      "resolution": "still open at the stop (open: round limit 2, round 2)",
+-      "closed_by": null,
+-      "question_id": "f13_white_cells_other--D2--eosinophils_absolute.female.Lactation.age_group--none.q"
++      "resolution": "D2 no longer reports this failure in round 3 (docs/signoff/work/checks/f13_white_cells_other-r3.json)",
++      "closed_by": "script",
++      "question_id": null
+     },
+     {
+       "id": "f13_white_cells_other--D2--eosinophils_absolute.female.Pregnancy.age_group--none",
+@@ -95,10 +97,10 @@
+       "row_key": null,
+       "side": null,
+       "severity": "blocking",
+-      "status": "physician_question",
++      "status": "closed",
+       "rounds": {
+         "opened": 1,
+-        "closed": null
++        "closed": 3
+       },
+       "evidence_paths": [
+         "docs/signoff/work/checks/f13_white_cells_other-r1.json",
+@@ -106,9 +108,9 @@
+       ],
+       "refutation_paths": [],
+       "summary": "D2 eosinophils_absolute|female|Pregnancy|age_group: EN \"Pregnancy\" vs ES \"Embarazo\" (expected \"Pregnancy\")",
+-      "resolution": "still open at the stop (open: round limit 2, round 2)",
+-      "closed_by": null,
+-      "question_id": "f13_white_cells_other--D2--eosinophils_absolute.female.Pregnancy.age_group--none.q"
++      "resolution": "D2 no longer reports this failure in round 3 (docs/signoff/work/checks/f13_white_cells_other-r3.json)",
++      "closed_by": "script",
++      "question_id": null
+     },
+     {
+       "id": "f13_white_cells_other--D3--basophils.both.All_Adults.none--high",
+@@ -207,7 +209,8 @@
+       },
+       "evidence_paths": [
+         "docs/signoff/work/checks/f13_white_cells_other-r1.json",
+-        "docs/signoff/work/checks/f13_white_cells_other-r2.json"
++        "docs/signoff/work/checks/f13_white_cells_other-r2.json",
++        "docs/signoff/work/checks/f13_white_cells_other-r3.json"
+       ],
+       "refutation_paths": [],
+       "summary": "D3 eosinophils_absolute|female|Lactation|no_catalogue_band: the catalogue has no band covering this row's ages for female",
+@@ -234,7 +237,8 @@
+       },
+       "evidence_paths": [
+         "docs/signoff/work/checks/f13_white_cells_other-r1.json",
+-        "docs/signoff/work/checks/f13_white_cells_other-r2.json"
++        "docs/signoff/work/checks/f13_white_cells_other-r2.json",
++        "docs/signoff/work/checks/f13_white_cells_other-r3.json"
+       ],
+       "refutation_paths": [],
+       "summary": "D3 eosinophils_absolute|female|Pregnancy|no_catalogue_band: the catalogue has no band covering this row's ages for female",
+@@ -788,6 +792,32 @@
+       "closed_by": null,
+       "question_id": "f13_white_cells_other--L2--none--none.q"
+     },
++    {
++      "id": "f13_white_cells_other--M3--none--none--obs-J2-r3-20261112220000-1",
++      "source": {
++        "judge_file": "docs/signoff/work/judges/mopup/J2-B05.f13_white_cells_other.closing.json",
++        "lens": "J2",
++        "round": 3
++      },
++      "family": "f13_white_cells_other",
++      "check_id": "M3",
++      "row_key": null,
++      "side": null,
++      "severity": "blocking",
++      "status": "physician_question",
++      "rounds": {
++        "opened": 3,
++        "closed": null
++      },
++      "evidence_paths": [
++        "docs/signoff/work/judges/mopup/J2-B05.f13_white_cells_other.closing.json"
++      ],
++      "refutation_paths": [],
++      "summary": "J2, mop-up closing pass: Mop-up dry run: an observation the closing lens enters for the orchestrator. (docs/signoff/work/decisions/f13_white_cells_other.json:1)",
++      "resolution": "still unreviewed at the stop (mop-up round 3: open, round 3)",
++      "closed_by": null,
++      "question_id": "f13_white_cells_other--M3--none--none--obs-J2-r3-20261112220000-1.q"
++    },
+     {
+       "id": "f13_white_cells_other--N1--none--none",
+       "source": {
+@@ -826,19 +856,19 @@
+       "row_key": "eosinophils_absolute|both|All Adults|none",
+       "side": "high",
+       "severity": "minor",
+-      "status": "physician_question",
++      "status": "closed",
+       "rounds": {
+         "opened": 1,
+-        "closed": null
++        "closed": 3
+       },
+       "evidence_paths": [
+         "docs/signoff/work/judges/round-1/J2-B05.f12_white_cells_core.f13_white_cells_other.f14_iron.json"
+       ],
+       "refutation_paths": [],
+       "summary": "J2: definition:reference interval eosinophils_absolute|both|All Adults|none For 501 to 575/µL the client reads 'Your eosinophil count is above the reference interval, which ends at 500/µL' (biomarker-ranges-en.json line 839), while Echevarne's own report prints 0-575 and flags the count normal (OBX-7 '0,000-575,000', catalogue line 202). The 500 is a declared decision limit, which this review conf",
+-      "resolution": "still open at the stop (open: round limit 2, round 2)",
+-      "closed_by": null,
+-      "question_id": "f13_white_cells_other--definition:reference_interval--eosinophils_absolute.both.All_Adults.none--high.q"
++      "resolution": "not raised again by J2 in the mop-up closing pass of round 3: read docs/signoff/work/compiled/B05-r3/f13_white_cells_other/biomarker-ranges-en.json:1 'the row as compiled (dry run)'",
++      "closed_by": "J2 round 3, mop-up closing pass",
++      "question_id": null
+     }
+   ]
+ }
+diff --git a/docs/signoff/work/questions/f13_white_cells_other.md b/docs/signoff/work/questions/f13_white_cells_other.md
+index 8134eea..47adbbf 100644
+--- a/docs/signoff/work/questions/f13_white_cells_other.md
++++ b/docs/signoff/work/questions/f13_white_cells_other.md
+@@ -3,21 +3,20 @@
+ <!-- ledger:start (written by docs/signoff/tools/ledger.js finalize; do not edit by hand) -->
+ ## Ledger at the stop: f13_white_cells_other
+ 
+-Stop rule: open: round limit 2, round 2. AI pre-review; a licensed physician decides each item.
++Stop rule: mop-up round 3: open, round 3. AI pre-review; a licensed physician decides each item.
+ 
+-### Physician questions, blocking (6)
++### Physician questions, blocking (5)
+ 
+-- `f13_white_cells_other--C1--eosinophils_absolute.female.Lactation.unreachable--none.q` (blocking, script, C1): C1 eosinophils_absolute|female|Lactation|unreachable: row at file index 32 is never picked for any sex and age 18-120. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json.
+-- `f13_white_cells_other--C1--eosinophils_absolute.female.Pregnancy.unreachable--none.q` (blocking, script, C1): C1 eosinophils_absolute|female|Pregnancy|unreachable: row at file index 31 is never picked for any sex and age 18-120. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json.
+-- `f13_white_cells_other--D2--eosinophils_absolute.female.Lactation.age_group--none.q` (blocking, script, D2): D2 eosinophils_absolute|female|Lactation|age_group: EN "Lactation" vs ES "Lactancia" (expected "Lactation"). Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json.
+-- `f13_white_cells_other--D2--eosinophils_absolute.female.Pregnancy.age_group--none.q` (blocking, script, D2): D2 eosinophils_absolute|female|Pregnancy|age_group: EN "Pregnancy" vs ES "Embarazo" (expected "Pregnancy"). Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json.
+-- `f13_white_cells_other--D3--eosinophils_absolute.female.Lactation.no_catalogue_band--none.q` (blocking, script, D3): D3 eosinophils_absolute|female|Lactation|no_catalogue_band: the catalogue has no band covering this row's ages for female. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json.
+-- `f13_white_cells_other--D3--eosinophils_absolute.female.Pregnancy.no_catalogue_band--none.q` (blocking, script, D3): D3 eosinophils_absolute|female|Pregnancy|no_catalogue_band: the catalogue has no band covering this row's ages for female. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json.
++- `f13_white_cells_other--C1--eosinophils_absolute.female.Lactation.unreachable--none.q` (blocking, script, C1): C1 eosinophils_absolute|female|Lactation|unreachable: row at file index 32 is never picked for any sex and age 18-120. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json, docs/signoff/work/checks/f13_white_cells_other-r3.json.
++- `f13_white_cells_other--C1--eosinophils_absolute.female.Pregnancy.unreachable--none.q` (blocking, script, C1): C1 eosinophils_absolute|female|Pregnancy|unreachable: row at file index 31 is never picked for any sex and age 18-120. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json, docs/signoff/work/checks/f13_white_cells_other-r3.json.
++- `f13_white_cells_other--D3--eosinophils_absolute.female.Lactation.no_catalogue_band--none.q` (blocking, script, D3): D3 eosinophils_absolute|female|Lactation|no_catalogue_band: the catalogue has no band covering this row's ages for female. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json, docs/signoff/work/checks/f13_white_cells_other-r3.json.
++- `f13_white_cells_other--D3--eosinophils_absolute.female.Pregnancy.no_catalogue_band--none.q` (blocking, script, D3): D3 eosinophils_absolute|female|Pregnancy|no_catalogue_band: the catalogue has no band covering this row's ages for female. Evidence: docs/signoff/work/checks/f13_white_cells_other-r1.json, docs/signoff/work/checks/f13_white_cells_other-r2.json, docs/signoff/work/checks/f13_white_cells_other-r3.json.
++- `f13_white_cells_other--M3--none--none--obs-J2-r3-20261112220000-1.q` (blocking, J2, M3): J2, mop-up closing pass: Mop-up dry run: an observation the closing lens enters for the orchestrator. (docs/signoff/work/decisions/f13_white_cells_other.json:1). Evidence: docs/signoff/work/judges/mopup/J2-B05.f13_white_cells_other.closing.json.
+ 
+ ### Disputed: refuters split (0)
+ 
+ 
+-### Physician questions, minor (7)
++### Physician questions, minor (6)
+ 
+ - `f13_white_cells_other--D3--basophils.both.All_Adults.none--high.q` (minor, J1, D3, basophils|both|All Adults|none, high): J1: D3 basophils|both|All Adults|none Echevarne prints '<1.5' %, but Normal_High 1.5 under the rule 'value > Normal_High' treats exactly 1.5% as in range (the same for eosinophils '<5' %, '<575'/µL and basophils '<175'/µL). Evidence: docs/signoff/work/judges/round-1/J1-B05.f12_white_cells_core.f13_white_cells_other.f14_iron.json.
+ - `f13_white_cells_other--D3--basophils_absolute.both.All_Adults.none--high.q` (minor, J2, D3, basophils_absolute|both|All Adults|none, high): J2: D3 basophils_absolute|both|All Adults|none Normal_High 175/µL is inclusive in EVA, but Echevarne prints '<175' (catalogue line 204), which by the same HL7 evidence (bands % '5,000' at '0,000-5,000' flagged H) excludes 175 itself.. Evidence: docs/signoff/work/judges/round-1/J2-B05.f12_white_cells_core.f13_white_cells_other.f14_iron.json.
+@@ -25,5 +24,4 @@ Stop rule: open: round limit 2, round 2. AI pre-review; a licensed physician dec
+ - `f13_white_cells_other--D3--none--none.q` (minor, J2, D3): J2: D3 D3 fails 'no_catalogue_band' on the eosinophils_absolute female Pregnancy and Lactation rows (docs/signoff/work/checks/B05-r1.json line 144) because the runner tests ages with ageGroupContains on the age label, which on state rows is 'Pregnancy' or 'Lactation' (scripts/signoff/checks/data.ts line 254); Echevarne's H0011 band is General, ages '0-999' (catalogue line 202), and covers them. A . Evidence: docs/signoff/work/judges/round-1/J2-B05.f12_white_cells_core.f13_white_cells_other.f14_iron.json.
+ - `f13_white_cells_other--L2--none--none.q` (minor, J1, L2): J1: L2 Family-added action limits (basophils 1,000/µL or more, monocytes 1,000/µL or more, eosinophils 1,500/µL or more) exist only in row text, not in action-limits.json. Evidence: docs/signoff/work/judges/round-1/J1-B05.f12_white_cells_core.f13_white_cells_other.f14_iron.json.
+ - `f13_white_cells_other--N1--none--none.q` (minor, J3, N1): J3: N1 None of f13's six markers is in docs/signoff/work/nhanes/distributions.json. Several limits therefore have no check of population shares, although the rows themselves call them narrower than measured healthy limits: eosinophils <5% (PQ-f13-01), monocytes 0.2-10%, basophils <1.5%. The same goes for the eosinophil decision limit of 500/µL.. Evidence: docs/signoff/work/judges/round-1/J3-B05.f12_white_cells_core.f13_white_cells_other.f14_iron.json.
+-- `f13_white_cells_other--definition:reference_interval--eosinophils_absolute.both.All_Adults.none--high.q` (minor, J2, definition:reference interval, eosinophils_absolute|both|All Adults|none, high): J2: definition:reference interval eosinophils_absolute|both|All Adults|none For 501 to 575/µL the client reads 'Your eosinophil count is above the reference interval, which ends at 500/µL' (biomarker-ranges-en.json line 839), while Echevarne's own report prints 0-575 and flags the count normal (OBX-7 '0,000-575,000', catalogue line 202). The 500 is a declared decision limit, which this review conf. Evidence: docs/signoff/work/judges/round-1/J2-B05.f12_white_cells_core.f13_white_cells_other.f14_iron.json.
+ <!-- ledger:end -->

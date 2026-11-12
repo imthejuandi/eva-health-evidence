@@ -42,3 +42,12 @@ A clean clone used by the governance reviewer: HEAD detached at 29346867f96c6d86
 - gov 47059923bbc5f4ace5cd279deed40d95a8236b34
 
 The reviewer's outputs beside it (refusal-out, cache-rerun, round2, online) are kept.
+
+## scratchpad/mopup-impl/dry-run/attempt4/clone (549 MB) and clone-run0 (401 MB)
+The mocked dry run's reused clone (155 branches, every dry run's steps kept as dry-run/keep/* branches) and the first run's clone. Kept here, in clones/: for each, its HEAD, its refs, its git status, its tracked changes as a binary diff, its untracked files (tar.xz), and a git bundle of every local branch's commits that are not on the clone's remote-tracking branches (155 of 155 heads and 1 of 1; both verify against the eva-health repository, which holds their prerequisites). A clone can be rebuilt with: git clone <eva-health>; git fetch <bundle> 'refs/heads/*:refs/heads/*'; check out the HEAD; apply the diff; unpack the untracked files. The dry-run outputs beside it (attempt4/run*, attempt5 to attempt21) are kept.
+
+## scratchpad/ws3-wave2/decide-WS3-09/snap (392 MB)
+A file copy of the repository tree that the WS3-09 decider compared against (not a git repository). Kept whole as decide-WS3-09-snap.tar.xz (17.7 MB). The decider's other files (c30, diffs.json, strict.ts) are kept.
+
+## scratchpad/ws3-wave2/review-WS3-39-frozen: before-tree, after-tree, old-6c611b7, old-origin-main (1.2 GB)
+The frozen D4 reviewer's copies, made with git archive of b3cafa4, 118f61e, 6c611b7 and origin/main (c472974): every file carries its commit's time. The only files written later, kept in that folder's kept-from-trees/: after-tree/zz-review/dash.ts and fake-gates.ts, old-6c611b7/zz-review/dash.ts, and old-6c611b7/scripts/signoff/checks/data.ts (the 118f61e runner file placed on the old app to probe the old gate). The reviewer's results (review.json, runs/ with 184 runs, the .out files) are kept.

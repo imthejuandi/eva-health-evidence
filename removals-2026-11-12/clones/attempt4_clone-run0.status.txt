@@ -1,0 +1,3 @@
+?? docs/signoff/work/checks/B05-mopup-run.json
+?? docs/signoff/work/checks/B05-mopup-state.json
+?? docs/signoff/work/scorecard-B05.mopup.md

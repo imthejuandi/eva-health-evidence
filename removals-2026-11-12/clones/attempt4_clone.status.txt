@@ -1,0 +1,10 @@
+ M docs/signoff/work/decisions/f13_white_cells_other.json
+ M docs/signoff/work/ledger/f13_white_cells_other.json
+ M docs/signoff/work/questions/f13_white_cells_other.md
+?? docs/signoff/work/checks/B05-mopup-run.json
+?? docs/signoff/work/checks/B05-mopup-state.json
+?? docs/signoff/work/checks/B05-r3-changes.json
+?? docs/signoff/work/checks/f13_white_cells_other-r3.json
+?? docs/signoff/work/compiled/B05-r3/
+?? docs/signoff/work/judges/mopup/
+?? docs/signoff/work/scorecard-B05.mopup.md
