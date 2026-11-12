@@ -19,3 +19,7 @@ Any copy can be made again with `git archive <commit> | tar -x -C <folder>` from
 
 - `local-branches.bundle`: every local branch of the work repository, minus what the remote already holds (32 heads; verified with `git bundle verify`). It also keeps the unpushed package branches (ws3-c to ws3-h, ws3-int) off the work machine.
 - `local-heads.txt`: each local branch and its commit at the time of the bundle.
+
+## Added at 20:32 UTC: the same reviewer's mutation tree (review-WS3-12-frozen/tree-mut, 404 MB)
+
+A copy of the source tree at 6112b5e that the frozen-file reviewer used to plant mutants on 12 November between 00:54 and 01:35 UTC. Compared file by file with 6112b5e (git blob ids): 0 files added and 0 changed, because the reviewer restored each mutant after its run. Its mutant definitions and their results sit beside it (mutants/, mutants-vitest/, mutants.out, mutants-compare.out) and are kept in place. 6112b5e lives on local branches ws3-c and ws3-g and is in branches/local-branches.bundle of this repository.
