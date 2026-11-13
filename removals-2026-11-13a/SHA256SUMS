@@ -1,0 +1,16 @@
+684a954754a4f0d6d05044258c230fd68ff719a5641ea0194c06daa375caee1d  ./files.txt
+742d39bb1619f827840d38f6bef3cb089969b9f1b6fa5c6eed75be21d35d1fb7  ./files/WS3-13/capture-after-0.json.xz
+73f7c6ef3e47b874b25802daaaeaf29dceb2347a298f4529ad54d275c7390de4  ./files/WS3-13/capture-after-false.json.xz
+0afe2432aaca76b701c55bc4bd1df2f2cc91780a1d98b8812649441ba7699735  ./files/WS3-13/capture-after-unset.json.xz
+636f4becd8839572864253590289188fbfe3a1b04c98361d6036ca160eb340d0  ./files/WS3-13/capture-before-07bf274.json.xz
+73f7c6ef3e47b874b25802daaaeaf29dceb2347a298f4529ad54d275c7390de4  ./files/WS3-13/fix1/capture-d6062dc-false.json.xz
+0afe2432aaca76b701c55bc4bd1df2f2cc91780a1d98b8812649441ba7699735  ./files/WS3-13/fix1/capture-d6062dc-unset.json.xz
+1a1eb6c5a6258f0ca3eed725f02cbc86ba29183af7105549c2034c194325372c  ./files/closure-precheck/partA/probes/fn-dump-07bf274.json.xz
+bdbb45029faf54eef0ab03305d20b9154bd9aaf5e64156150bf47643ff6e8a95  ./files/integration/trial-ws3-e-d55ef1a/capture-trial.json.xz
+2dbfbfb882eeabc24f9fa38c7bde8b6f549104af2feeadc20684a265b89bb6ab  ./files/prereview-WS3-43-41/r2/sweep/stored-600.jsonl.xz
+2dbfbfb882eeabc24f9fa38c7bde8b6f549104af2feeadc20684a265b89bb6ab  ./files/prereview-WS3-43-41/sweep/stored-600.jsonl.xz
+da0106c438ea2dca24a87c51d91de4a89664ae0a91385d08ddab42537d9c5bb4  ./files/review-WS3-12-frozen/probes/fn-dump-6112b5e.json.xz
+f4eaf3c226c5050412963304e1733074cf976a90eedc7e20faf7c106653cfc48  ./files/review-WS3-12-frozen/probes/fn-dump-6c611b7.json.xz
+0a604c0cc169c7f24c94d04843f733c82fa5e02f9db842b7753b1dd45d547eb4  ./files/review-WS3-38/fuzz-after.jsonl.xz
+b65bb94c19223fdd1280187954087370cd46a2ead88499093aae05418f427041  ./files/review-WS3-38/fuzz-before.jsonl.xz
+9e35767249a3483417af553bd00719ccdf51e028469ce43d40a1c2b0b422cc23  ./removed.md
